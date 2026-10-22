@@ -1,0 +1,6 @@
+
+# Local Go coverage and CI report artifacts.
+cover.out
+coverage.md
+comment.md
+__pycache__/
