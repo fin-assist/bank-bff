@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@v5
         if: hashFiles('go.mod') != ''
         with:
@@ -36,9 +37,10 @@ jobs:
             echo 'COVERAGE_INPUT=--empty' >> "$GITHUB_ENV"
           fi
 
-      # Informational: the 80 % target for changed lines is checked in review (AGENTS.md, Tests);
-      # nothing fails on a low value or a failed script. The branch name goes through env.
+      # Informational coverage report; this repository has no changed-line percentage gate.
+      # The branch name goes through env.
       - name: Project and changed-line coverage
+        id: coverage
         if: github.event_name == 'pull_request'
         continue-on-error: true
         env:
@@ -54,7 +56,7 @@ jobs:
       # One comment per PR, found by its marker and edited on every push. PRs from forks get a
       # read-only token, so they are skipped; a failed post never fails the build.
       - name: Coverage comment on the PR
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('coverage.md') != ''
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.coverage.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,12 +64,13 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          test -s coverage.md || exit 0
           marker='<!-- coverage-report (ci.yml) -->'
           {
             echo "$marker"
             cat coverage.md
             echo
-            echo "<sub>Commit ${HEAD_SHA::7} · [CI run]($RUN_URL) · цель 80 % изменённых строк, AGENTS.md (Tests)</sub>"
+            echo "<sub>Commit ${HEAD_SHA::7} · [CI run]($RUN_URL) · информационный отчёт</sub>"
           } > comment.md
           id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
             | jq -rs --arg m "$marker" \
