@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        if: hashFiles('go.mod') != ''
+        with:
+          go-version-file: go.mod
+      - name: Test with coverage when the module exists
+        if: hashFiles('go.mod') != ''
+        run: go test -race -count=1 -coverpkg=./... -coverprofile=cover.out ./...
+      - name: Test the coverage report
+        run: python3 -m unittest discover -s scripts -p 'test_coverage_diff.py'
+      - name: Coverage input
+        run: |
+          if [ -f go.mod ]; then
+            echo 'COVERAGE_INPUT=--profile cover.out' >> "$GITHUB_ENV"
+          else
+            echo 'COVERAGE_INPUT=--empty' >> "$GITHUB_ENV"
+          fi
+
+      # Informational: the 80 % target for changed lines is checked in review (AGENTS.md, Tests);
+      # nothing fails on a low value or a failed script. The branch name goes through env.
+      - name: Project and changed-line coverage
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          rm -f coverage.md
+          python3 scripts/coverage-diff.py $COVERAGE_INPUT --base "origin/$BASE_REF" --summary "$GITHUB_STEP_SUMMARY" > coverage.md
+      - name: Coverage of the project
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: python3 scripts/coverage-diff.py $COVERAGE_INPUT --summary "$GITHUB_STEP_SUMMARY"
+
+      # One comment per PR, found by its marker and edited on every push. PRs from forks get a
+      # read-only token, so they are skipped; a failed post never fails the build.
+      - name: Coverage comment on the PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('coverage.md') != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          marker='<!-- coverage-report (ci.yml) -->'
+          {
+            echo "$marker"
+            cat coverage.md
+            echo
+            echo "<sub>Commit ${HEAD_SHA::7} · [CI run]($RUN_URL) · цель 80 % изменённых строк, AGENTS.md (Tests)</sub>"
+          } > comment.md
+          id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+            | jq -rs --arg m "$marker" \
+              '[.[][] | select(.user.login == "github-actions[bot]" and (.body | startswith($m)))][0].id // empty')
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@comment.md > /dev/null
+          else
+            gh api "repos/${{ github.repository }}/issues/$PR/comments" -F body=@comment.md > /dev/null
+          fi
