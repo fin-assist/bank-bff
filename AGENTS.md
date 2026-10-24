@@ -3,6 +3,16 @@
 `bank-bff` is currently an empty scaffold of «Понятные финансы». Read `README.md` first.
 Contracts live in `fin-assist/contracts`; do not invent REST fields, RPCs or errors here.
 
+## SQL construction in Go
+
+Applies when handwritten Go code in this repository needs to build SQL queries.
+
+- **SQL construction:** use [Squirrel](https://github.com/Masterminds/squirrel)
+  (`github.com/Masterminds/squirrel`) instead of assembling SQL by concatenating Go strings wherever the builder
+  supports the query. This is an approved exception to "standard library first". Pass values as query arguments,
+  use `PlaceholderFormat(sq.Dollar)` for PostgreSQL, and keep table and column names constant. If the builder
+  cannot express the query, explain the limitation next to the manual SQL construction and keep it parameterized.
+
 ## Workflow
 
 Branch from `main`, open PRs to `main`; titles and descriptions are Russian and reference the FIN issue.
