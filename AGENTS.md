@@ -19,9 +19,13 @@ Applies when handwritten Go code in this repository needs to build SQL queries.
 
 Branch from `main`, open PRs to `main`; titles and descriptions are Russian and reference the FIN issue.
 Commits and code are English. Never merge without the owner's explicit command.
-CI runs coverage script tests; when a root `go.mod` exists it also tests the Go module once with coverage.
+CI and `make test` run all Python script tests and check CHANGELOG format. When a root `go.mod` exists, CI also tests the Go module once with coverage.
 Without a module the report explicitly has no data. Keep README and CI instructions current.
 Run tests with a process timeout; no UI test execution is authorized.
+
+## Service releases
+
+`CHANGELOG.md`, `docs/releasing.md` and `.github/workflows/release.yml` define repeatable GitHub Releases for existing version tags. The scaffold starts with empty Unreleased; do not invent released versions or Go/application code. The owner alone pushes tags. Run `make release-check VERSION=vX.Y.Z` against the prepared release section before tagging. Release publication is separate from image/deployment work.
 
 ## Code Review Rules
 
