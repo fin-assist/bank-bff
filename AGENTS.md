@@ -22,7 +22,7 @@ Commits and code are English. Never merge without the owner's explicit command.
 FIN-238: CI uses pinned go-test-coverage v2.20.1 with independent unit/integration/API total80 statements gates.
 The owner accepts its rounding of 79.95% to 80.0%. Every suite instruments all `./...`, including generated code
 and ordinary `.go` test helpers, without exclusions. Name tests TestUnit…, TestIntegration… or TestAPI…;
-`make test-names` rejects tests omitted by these selectors. Unit has no network/DB, integration uses real
+`make test-names` uses `go test -race -list` to reject tests omitted by these selectors; every collect target requires it. Unit has no network/DB, integration uses real
 transport/dependencies/jobs, API calls the full BFF assembly over HTTP/REST/SSE. Direct handlers are not API.
 check-suite.sh uses jq to require an executed passing Test and reject skips/failures, plus a minimal positive
 statement-block guard. It does not calculate coverage. PostgreSQL absence fails (CI=true). Built-in comma-profile
