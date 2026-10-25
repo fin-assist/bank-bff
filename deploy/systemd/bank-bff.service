@@ -15,7 +15,9 @@ Environment=ENV=stage
 # must not set PUBLIC_ADDR or HTTP_ADDR.
 Environment=PUBLIC_ADDR=127.0.0.1:8080
 Environment=HTTP_ADDR=127.0.0.1:9091
-# Defense in depth independent of the environment: only loopback traffic is allowed.
+# Defense in depth on top of the loopback binding: only loopback traffic is allowed.
+# Requires cgroup eBPF support (silently ignored otherwise) and a drop-in can reset it;
+# verify with `systemctl show bank-bff -p IPAddressDeny` and `ss -ltn` on the stand.
 # Future outgoing peer calls (gRPC services) need explicit IPAddressAllow entries.
 IPAddressAllow=localhost
 IPAddressDeny=any
