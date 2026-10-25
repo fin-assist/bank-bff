@@ -246,6 +246,8 @@ class DeployExamplesTests(unittest.TestCase):
             # these would pass, so they test the joining itself.
             unit.replace("Environment=HTTP_ADDR=", "RestartSec=2s \\\nEnvironment=HTTP_ADDR="),
             unit.replace("IPAddressDeny=any\n", "RestartSec=2s \\\n# swallowed comment\nIPAddressDeny=any\n"),
+            # Python lstrip() would take this NBSP line for a comment inside the continuation,
+            # systemd does not; only the ASCII filter rejects it.
             unit.replace("RestartSec=2s\n",
                          "RestartSec=2s \\\n\xa0# c\nUnsetEnvironment=HTTP_ADDR PUBLIC_ADDR\n"),
             unit + "[X-Extra]\nEnvironment=HTTP_ADDR=0.0.0.0:9091\n",
