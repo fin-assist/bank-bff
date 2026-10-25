@@ -25,7 +25,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version: 1.27.1
+          go-version-file: go.mod
       - name: Access to private modules
         env:
           TOKEN: ${{ secrets.GO_MODULES_TOKEN }}
@@ -33,22 +33,16 @@ jobs:
           if [ -n "$TOKEN" ]; then
             git config --global url."https://x-access-token:${TOKEN}@github.com/fin-assist/".insteadOf "https://github.com/fin-assist/"
           fi
-      - name: Test suite input guards and pinned tool rounding
-        run: python3 -m unittest discover -s scripts -p 'test_*.py'
-      - name: CHANGELOG.md format
-        run: python3 scripts/changelog.py check
-      - name: Require the service module
-        run: |
-          if [ ! -f go.mod ]; then
-            echo 'bank-bff has no Go module or implemented public API yet; FIN-238 acceptance is incomplete.' >&2
-            exit 1
-          fi
       - name: go.mod is tidy
         run: go mod tidy -diff
       - name: Vet
         run: go vet ./...
       - name: All tests belong to a suite
         run: make test-names
+      - name: Test the scripts
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: CHANGELOG.md format
+        run: python3 scripts/changelog.py check
       - name: Collect unit statements coverage
         id: collect_unit
         continue-on-error: true
@@ -123,3 +117,62 @@ jobs:
               exit 1
             fi
           done
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Access to private modules
+        env:
+          TOKEN: ${{ secrets.GO_MODULES_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            git config --global url."https://x-access-token:${TOKEN}@github.com/fin-assist/".insteadOf "https://github.com/fin-assist/"
+          fi
+      # forbidigo keeps errors on the finerr constructors (grpc-api.md 5.2), see .golangci.yml.
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # Build only; publishing to GHCR and the tag in fin-assist/infra are FIN-148.
+      - name: Build
+        env:
+          TOKEN: ${{ secrets.GO_MODULES_TOKEN }}
+        run: |
+          secret=()
+          if [ -n "$TOKEN" ]; then
+            printf 'machine github.com login x-access-token password %s\n' "$TOKEN" > "$RUNNER_TEMP/netrc"
+            secret=(--secret id=netrc,src="$RUNNER_TEMP/netrc")
+          fi
+          DOCKER_BUILDKIT=1 docker build "${secret[@]}" --build-arg VERSION="${GITHUB_SHA::12}" -t bank-bff:ci .
+          set +e
+          output=$(docker run --rm bank-bff:ci help 2>&1)
+          status=$?
+          set -e
+          test "$status" -eq 2
+          grep -q 'usage:' <<< "$output"
+      - name: HTTP image smoke test
+        run: |
+          trap 'docker rm -f bank-bff-smoke >/dev/null 2>&1 || true' EXIT
+          docker run -d --name bank-bff-smoke -e SHUTDOWN_DELAY=0s \
+            -p 127.0.0.1::8080 -p 127.0.0.1::9091 bank-bff:ci
+          public=$(docker port bank-bff-smoke 8080/tcp)
+          operational=$(docker port bank-bff-smoke 9091/tcp)
+          curl --retry 20 --retry-all-errors --retry-delay 1 --max-time 2 --fail "http://$operational/readyz"
+          curl --max-time 2 --fail "http://$operational/healthz"
+          curl --max-time 2 --fail "http://$operational/metrics" -o metrics.txt
+          grep -q go_goroutines metrics.txt
+          for path in /metrics /healthz /readyz /v1/profile; do
+            test "$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' "http://$public$path")" = 404
+          done
+          docker stop --time 5 bank-bff-smoke
+          test "$(docker inspect --format '{{.State.ExitCode}}' bank-bff-smoke)" = 0

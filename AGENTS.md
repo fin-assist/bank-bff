@@ -1,44 +1,94 @@
 # Instructions for code agents
 
-`bank-bff` is currently an empty scaffold of «Понятные финансы». Read `README.md` first.
-Contracts live in `fin-assist/contracts`; do not invent REST fields, RPCs or errors here.
+`bank-bff` is the stateless HTTP backend for frontend of «Понятные финансы», adapted from
+`fin-assist/go-service-template` main 6ea35ce (FIN-246) in FIN-261. Read README.md first.
+The public mux currently has no business routes. Do not invent REST fields, RPCs or error codes.
+Contracts live in `fin-assist/contracts`: docs/api.md, openapi/openapi.yaml, docs/grpc-api.md.
+The owner's latest decision and contracts take precedence over copied template assumptions.
+
+## Repository map
+
+- cmd/bank-bff: serve command, logger, exit status, SIGINT/SIGTERM.
+- internal/app: explicit assembly of public and operational HTTP listeners and bounded shutdown.
+- internal/config: all environment settings in Vars; docs/config.md table is checked by tests.
+- internal/ops: private health/readiness and Prometheus Go/process metrics.
+- docs/server.md and docs/testing.md: lifecycle and test scope.
+- Dockerfile, compose.yaml, deploy/systemd/bank-bff.service: packaging and stand example.
+- Makefile, .github/workflows/ci.yml, .golangci.yml: checks.
+- CHANGELOG.md, docs/releasing.md, .github/workflows/release.yml, scripts/changelog.py: service releases.
+
+Keep README, AGENTS and docs current in the same PR. Code, comments and commits are English;
+docs and PR title/body are Russian. Every exported identifier has a doc comment.
+Use standard library net/http, slog, errors and testing; no frameworks, ORM, DI container,
+third party logger or assertion/mocking library. A dependency needs a concrete reason in the PR.
+Small interfaces are owned by their consumer, with explicit wiring. Usecases do not import adapters.
+Shared Go infrastructure belongs in tagged fin-assist libraries; do not copy their internals.
+Stateless BFF has no PostgreSQL, migration command, incoming gRPC server or background jobs.
+Add an infrastructure dependency only for a real endpoint/usecase; no dummy code for coverage.
+
+## Security
+
+- Keep operational endpoints on their own private listener; never attach metrics, readiness or
+  pprof to the public mux. Production ingress exposes only PUBLIC_ADDR and terminates TLS.
+- No public business route exists until its contract validation, authorization, rate limits and
+  failure mapping are implemented together. Do not add a dev authentication bypass.
+- User identity comes from verified credentials, not an input user_id. Propagate only verified
+  identity and explicitly allowlisted metadata to internal services. Error translation follows
+  finerr and contracts; unknown internal failures are generic 500, never raw error text.
+- Secrets, tokens, personal data and request bodies stay out of logs. No user_id/free-text metric labels.
+- All listeners have header/read/write/idle limits. Future uploads/SSE require contract-specific
+  limits and tests; do not silently reuse unary limits for long streams.
+- Bind both listeners before readiness. On failure release the other listener. Drain on SIGTERM,
+  bound shutdown and close active connections after timeout. Readiness drops before shutdown.
+- CI untrusted input never becomes shell code; fork PRs have no comment write permissions.
 
 ## SQL construction in Go
 
-Applies when handwritten Go code in this repository needs to build SQL queries.
+If a future task introduces SQL, fixed-structure queries use plain SQL with parameters ($1, $2, …).
+Use github.com/Masterminds/squirrel only for dynamic query structure (optional predicates/columns),
+with PlaceholderFormat(sq.Dollar). Values remain parameters; identifiers/structure are constants
+or explicit allowlists. Changing values alone is not dynamic SQL. Explain a builder limitation
+beside any necessary manual construction. No SQL or database is needed in the current BFF.
 
-- **SQL construction:** write fixed-structure queries as plain SQL with parameters (`$1`, `$2`, … for
-  PostgreSQL). Use [Squirrel](https://github.com/Masterminds/squirrel) (`github.com/Masterminds/squirrel`) only
-  when assembling a query dynamically, such as optional predicates or varying column lists. Changing argument
-  values alone does not make a query dynamic. This limited use is an approved exception to "standard library
-  first". Parameterize values; keep identifiers and structural fragments constant or from an explicit allowlist.
-  Use `PlaceholderFormat(sq.Dollar)` for PostgreSQL builders. If a dynamic query cannot be expressed by the
-  builder, explain the limitation beside its manual construction and preserve parameterization.
+## Tests
+
+All new logic has unit tests without network or database. Integration tests use real transports
+and dependencies. API tests send real HTTP through the full BFF command/assembly; direct handler
+calls are unit tests. Each future REST endpoint must have API tests against openapi.yaml using
+kin-openapi, success and every contract error, authentication, idempotency, headers and SSE as
+applicable. Peer services use transport fixtures on bufconn, not mocked generated clients.
+
+FIN-238: each of unit/integration/API independently requires >=80% statements of the same whole
+production module, using pinned go-test-coverage v2.20.1 with agreed 79.95% -> 80.0% rounding.
+No excluded packages/helpers/generated files for percentages. Combined is informational only.
+Test names start TestUnit…, TestIntegration… or TestAPI…; make test-names checks race-enabled
+inventory before each collector. Existing jq guards reject empty/skipped/failed suites and absent,
+empty, header-only or zero-statement profiles. Missing coverage fails required go; no service N/A.
+Network/TCP tests must actually bind and exchange HTTP; permission errors are failures, not skips.
+This stateless scaffold requires no PostgreSQL. Future real database functionality must use real
+PostgreSQL18 for integration/API tests and must not turn missing dependencies into successful skips.
 
 ## Workflow
 
-Branch from `main`, open PRs to `main`; titles and descriptions are Russian and reference the FIN issue.
-Commits and code are English. Never merge without the owner's explicit command.
-CI and `make test` run all Python script tests and check CHANGELOG format.
-FIN-238: CI uses pinned go-test-coverage v2.20.1 with independent unit/integration/API total80 statements gates.
-The owner accepts its rounding of 79.95% to 80.0%. Every suite instruments all `./...`, including generated code
-and ordinary `.go` test helpers, without exclusions. Name tests TestUnit…, TestIntegration… or TestAPI…;
-`make test-names` uses `go test -race -list` to reject tests omitted by these selectors; every collect target requires it. Unit has no network/DB, integration uses real
-transport/dependencies/jobs, API calls the full BFF assembly over HTTP/REST/SSE. Direct handlers are not API.
-check-suite.sh uses jq to require an executed passing Test and reject skips/failures, plus a minimal positive
-statement-block guard. It does not calculate coverage. PostgreSQL absence fails (CI=true). Built-in comma-profile
-merge is informational combined only. Missing Go module/suite/profile or low coverage fails the existing required
-job go. The scaffold is incomplete, not a passing empty service. Profiles/logs/native reports are CI artifacts;
-fork PRs never write comments. Keep README and CI instructions current.
-Run tests with a process timeout; no UI test execution is authorized.
+Branch from fetched main, PR to main. Titles/descriptions are Russian and reference the FIN issue.
+Run make test, make lint and independent make cover gates with a process timeout. Toolchain comes
+from go.mod; GOTOOLCHAIN=auto downloads it. No UI test execution is authorized.
+Before review, make separate Security and Tests passes. Request in Russian:
 
-## Service releases
+@codex @claude проведите ревью этого PR по Code Review Rules в AGENTS.md, включая Security и Tests.
+Замечания — на русском, inline на изменённых строках. Особое внимание: <риски изменения>.
 
-`CHANGELOG.md`, `docs/releasing.md` and `.github/workflows/release.yml` define repeatable GitHub Releases for existing version tags. The scaffold starts with empty Unreleased; do not invent released versions or Go/application code. The owner alone pushes tags. Run `make release-check VERSION=vX.Y.Z` against the prepared release section before tagging. Release publication is separate from image/deployment work.
+Request Claude only when its workflow already exists on main; otherwise request only Codex.
+Review the current SHA, fix verified findings, reply/resolve threads and request review again.
+Never merge without the owner's explicit command. Do not change protections or suppress red checks.
+Tags are created only by the owner; release publication, image publication and deployment are separate.
 
 ## Code Review Rules
 
 Report verified findings inline in Russian. Make separate Security and Tests passes.
-Security: untrusted PR input must never become shell code; fork PRs do not write coverage comments.
-Tests: verify empty/skipped/failed suites, missing/empty/zero-statement profiles, selector classification and accepted rounding. Every suite independently meets total80; combined never compensates for a failed level.
-No application behaviour or public API changes are part of this CI-only increment.
+Security: authorization boundaries, private operational listener, no data leakage, bounded HTTP and
+shutdown, startup failure cleanup, trusted metadata, safe CI and fork permissions.
+Tests: meaningful behavior coverage at all three levels; real HTTP API and transport dependencies;
+negative startup/shutdown scenarios; unchanged strict guards and independent total80.
+No business REST/SSE or database functionality is part of FIN-261. Do not require absent business
+handlers solely to increase coverage, and do not treat passing scaffold tests as implemented APIs.

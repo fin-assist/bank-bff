@@ -18,7 +18,7 @@ class CoveragePolicyTests(unittest.TestCase):
             if tool:
                 command = [tool]
             else:
-                command = ["go", "run", "github.com/vladopajic/go-test-coverage/v2@v2.20.1"]
+                command = ["env", "GOTOOLCHAIN=auto", "go", "run", "github.com/vladopajic/go-test-coverage/v2@v2.20.1"]
             for covered, missed, success in [(1600, 400, True), (1599, 401, True),
                                              (1598, 402, False), (0, 2000, False)]:
                 with self.subTest(covered=covered, missed=missed):

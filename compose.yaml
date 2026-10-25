@@ -1,0 +1,9 @@
+services:
+  bank-bff:
+    build: .
+    environment:
+      ENV: dev
+      LOG_FORMAT: text
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:9091:9091"
