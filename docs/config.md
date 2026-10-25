@@ -4,14 +4,35 @@
 
 | Переменная | По умолчанию | Что |
 |---|---|---|
-| `SERVICE_NAME` | `bank-bff` | Имя сервиса в логах |
-| `ENV` | `prod` | dev, stage или prod |
-| `PUBLIC_ADDR` | `:8080` | Публичный HTTP listener; бизнес-маршруты пока не зарегистрированы |
+| `SERVICE_NAME` | `bank-bff` | Имя сервиса в логах и ServiceAccount для исходящих вызовов |
+| `ENV` | `prod` | dev, stage или prod; в dev публичный API не регистрируется |
+| `PUBLIC_ADDR` | `:8080` | Публичный HTTP listener REST/SSE |
 | `HTTP_ADDR` | `:9091` | Отдельный operational listener: /healthz, /readyz, /metrics |
 | `LOG_LEVEL` | `info` | debug, info, warn или error |
 | `LOG_FORMAT` | `json` | json или text |
 | `SHUTDOWN_DELAY` | `5s` | Пауза после снятия readiness для балансировщика |
 | `SHUTDOWN_TIMEOUT` | `20s` | Общий предел graceful shutdown обоих listeners |
+| `USER_GRPC_ADDR` | — | gRPC-адрес сервиса user (`dns:///user.finassist.svc.cluster.local:9090`); обязателен в stage/prod |
+| `ASSISTANT_GRPC_ADDR` | — | gRPC-адрес сервиса assistant; обязателен в stage/prod |
+| `AUTH_USER_ISSUER` | — | `iss` access JWT пользователя, как у user; обязателен в stage/prod |
+| `AUTH_USER_AUDIENCE` | — | `aud` access JWT пользователя, как у user; обязателен в stage/prod |
+| `SERVICE_TOKEN_FILE` | — | prod: projected ServiceAccount token с audience finassist-internal |
+| `AUTH_KUBERNETES_ISSUER` | — | prod: issuer ServiceAccount; пусто — значение go-identity |
+| `AUTH_KUBERNETES_JWKS_URL` | — | prod: JWKS API-сервера; пусто — значение go-identity |
+| `AUTH_KUBERNETES_CA_FILE` | — | prod: CA для JWKS API-сервера; пусто — значение go-identity |
+| `AUTH_KUBERNETES_API_TOKEN_FILE` | — | prod: токен пода для запроса JWKS; пусто — значение go-identity |
+| `AUTH_KUBERNETES_NAMESPACE` | — | prod: namespace вызывающих; пусто — значение go-identity |
+| `AUTH_STAGE_ISSUER` | — | stage: issuer сервисных JWT стенда |
+| `AUTH_STAGE_SIGNING_KEY_FILE` | — | stage: PKCS#8 Ed25519 ключ этого сервиса |
+| `AUTH_STAGE_PUBLIC_KEYS_FILE` | — | stage: JWKS ключей сервисов стенда |
+| `CLIENT_MIN_VERSIONS` | — | Минимальные версии клиента: `android=0.2.5,ios=0.1.0`; обязательна в stage/prod |
+| `MAINTENANCE` | `off` | on — все запросы /v1 получают 503 MAINTENANCE |
+| `MAINTENANCE_UNTIL` | — | Ожидаемое окончание техработ, RFC 3339; пусто — неизвестно |
+| `MAINTENANCE_RETRY_AFTER` | `5m` | Retry-After техработ, пока окончание неизвестно или прошло; 1s–24h |
+| `JSON_BODY_LIMIT` | `65536` | Предел JSON-тела запроса в байтах; 65536–1048576 |
+| `SSE_MAX_STREAMS` | `2000` | Предел одновременных SSE-потоков процесса |
+| `SSE_MAX_STREAMS_PER_IP` | `20` | Предел одновременных SSE-потоков с одного адреса клиента |
+| `SSE_BUSY_RETRY_AFTER` | `10s` | Retry-After отказа 429 по пределу SSE-потоков; 1s–5m |
 
 Адрес — `host:port` с числовым портом 0–65535; `:0` выбирает свободный порт для тестов. Фактические адреса публикуются в строке `serving`. Задержка остановки допустима от 0 до 1 минуты, timeout — больше 0 и до 5 минут. Некорректные настройки дают exit 1 до запуска listeners.
 
@@ -28,4 +49,12 @@
 
 `scripts/test_deploy_examples.py` — allowlist: в секции `[Service]` юнита (с учётом `\`-продолжений) допустимы только перечисленные директивы, а `ExecStart`, `EnvironmentFile`, `Environment`, `IPAddressAllow`, `IPAddressDeny` должны совпадать точно; в `compose.yaml` допустимы только перечисленные ключи и порты вида `"127.0.0.1:N:N"`, это единственный compose-файл в корне и `.env` там нет; оба файла — только ASCII, чтобы разбор совпадал с systemd и YAML. Env-файл стенда и drop-in тест не видит — для них действуют правила выше.
 
-В stateless-каркасе нет БД, миграций, `AUTH_MODE`, входящего gRPC, peer-адресов или service-токенов. Они не читаются. Пока публичный mux не имеет маршрутов и отвечает 404 на любой путь; авторизация будущих REST/SSE-методов добавляется вместе с ними по `fin-assist/contracts`, до регистрации маршрута. Шаблон не включает dev-обхода авторизации.
+### Публичный API (FIN-268)
+
+В `stage` и `prod` публичный listener обслуживает 14 операций входа, профиля и помощника (`docs/server.md`). Обязательны `USER_GRPC_ADDR`, `ASSISTANT_GRPC_ADDR`, `AUTH_USER_ISSUER`, `AUTH_USER_AUDIENCE` и `CLIENT_MIN_VERSIONS`; без них старт завершается exit 1 до привязки портов. Идентичность собирает `go-identity` v0.2.0 `NewAssembly`: в `prod` — projected ServiceAccount token (`SERVICE_TOKEN_FILE`, отличный от API-токена пода) и JWKS API-сервера по HTTPS с CA из `AUTH_KUBERNETES_*` (пустые значения — значения по умолчанию библиотеки), в `stage` — три `AUTH_STAGE_*` файла; файлы стенда в `prod` — ошибка старта. Ключи проверки access JWT пользователя берутся из `user.GetSigningKeys` по `USER_GRPC_ADDR`.
+
+В `dev` публичный mux пустой: любой путь — 404, как в каркасе FIN-261. `NewAssembly` не поддерживает `dev`, а обхода авторизации нет; локальная проверка API — только с настройками `stage`. БД, миграций, `AUTH_MODE` и входящего gRPC у BFF нет.
+
+`CLIENT_MIN_VERSIONS` — список `платформа=MAJOR.MINOR.PATCH` через запятую; платформа, которой нет в списке, получает 400 `CLIENT_VERSION_UNSUPPORTED`. `MAINTENANCE=on` переводит все запросы `/v1` в 503 `MAINTENANCE` с `Retry-After` (до `MAINTENANCE_UNTIL`, если он в будущем, иначе `MAINTENANCE_RETRY_AFTER`); режим меняется перезапуском с новым env, без релиза. `JSON_BODY_LIMIT` не может быть меньше 64 КиБ (FIN-339). SSE-пределы ограничивают одновременные потоки процесса и одного адреса клиента; отказ — 429 `RATE_LIMITED` со свежим `retry_at`.
+
+На стенде (`ENV=stage` в юните) env-файл должен задать peer-адреса, `AUTH_*` и `CLIENT_MIN_VERSIONS`. Исходящие gRPC-вызовы к сервисам на `127.0.0.1` проходят фильтр `IPAddressAllow=localhost`; peer на другом хосте потребует изменения юнита.

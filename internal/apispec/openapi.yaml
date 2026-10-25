@@ -1,0 +1,4497 @@
+openapi: 3.0.3
+info:
+  title: Понятные финансы — клиентский API
+  version: 1.0.0-mvp
+  description: |
+    Клиентский API приложения «Понятные финансы» (MVP). Источник правды по смыслу полей — `docs/api.md` в этом репозитории;
+    этот файл — машиночитаемый контракт для кодогенерации, валидации (kin-openapi) и контроля
+    несовместимых изменений (oasdiff в CI).
+
+    **Транспорт:** HTTP/2 REST + SSE. Версия — в пути (`/v1`).
+
+    **Соглашения:**
+    - Моменты времени — `date-time` с часовым поясом. Диапазоны — полуинтервал `[from, to)`.
+    - Календарные единицы считаются в часовом поясе профиля; исключение — сброс лимита помощника по Москве.
+    - Деньги — целые копейки (`int64`). Сумма операции ≥ 0, суммы аналитики и помощника — со знаком.
+    - ID — непрозрачные строки (сейчас UUIDv7); клиент их не разбирает и не конструирует.
+    - В ответах поле, которого нет в `required`, может отсутствовать; если у него `nullable`, может прийти и
+      `null` — клиент обрабатывает оба случая одинаково. В запросах необязательное поле просто не передаётся
+      (`null` не отправляется).
+    - **Закрытые наборы** — `enum`: новое значение = несовместимое изменение.
+      **Открытые наборы** — `string` с `x-extensible-enum`: известные значения перечислены, новое значение
+      совместимо, клиент обязан обработать неизвестное (поведение указано в описании поля).
+      Генераторы не делают из `x-extensible-enum` закрытый тип — неизвестное значение не роняет разбор.
+    - Полиморфные объекты (блок ответа помощника, чип) — плоские объекты с полем-типом, без `oneOf` и
+      дискриминатора: неизвестный тип разбирается и обрабатывается по правилу поля.
+    - Все ответы — объекты. Неизвестные поля клиент игнорирует.
+
+    **Время ожидания и часы** (`docs/api.md`): datetime — абсолютный RFC3339 момент, не разность с часами
+    телефона. Для ожидания приоритетны свежие Retry-After в секундах/RetryInfo и expires_in; клиент уменьшает
+    длительность по монотонному elapsed time с учётом сна. BFF формирует свежий Date во всех ответах,
+    включая4xx/5xx и replay, не копирует сохранённую дату. Только для приблизительного UI при datetime без
+    duration допустим target_datetime минус Date ТОГО ЖЕ свежего ответа с последующим вычитанием elapsed time.
+    Часы BFF/сервиса должны быть синхронизированы; сеть/точность Date делают оценку приблизительной.
+    Для свежей duration Date не требуется. Если срок только datetime и свежего Date нет — обновить состояние
+    по существующему разрешённому сценарию, до него без точного countdown. После reboot/потери monotonic anchor
+    обновление требуется для любого прежнего срока; cached Date/старую duration заново не запускать.
+    Это не proof авторизации, ключа или permission. Местная подпись верификации «до ЧЧ:ММ» сохраняется,
+    но отсчёт не зависит от смены wall clock/пояса. Новые server_time или *_in поля не вводятся.
+
+    **Заголовки:** `X-Request-Id` (клиент генерирует на каждую попытку, сервер возвращает эхом во всех ответах);
+    `Idempotency-Key` — на POST с побочным эффектом (у операции указан как обязательный параметр);
+    `X-Client-Version` — версия клиента, обязательна на всех запросах (FIN-20): ниже минимальной для
+    платформы, нет заголовка, значение не разобрано или платформа неизвестна — 400 `CLIENT_VERSION_UNSUPPORTED`;
+    свежий `Date` — во всех ответах BFF, включая ошибки;
+    `Retry-After` в секундах — у 429, 409 `REQUEST_IN_PROGRESS` и 503 `MAINTENANCE`.
+
+    **Универсальные внутренние ошибки**: google.rpc.Status + ErrorInfo/BadRequest/RetryInfo и optional
+    common.v1.RequestRetryInfo. Permission исходного RPC задаёт сервис/usecase; BFF соединяет его с доказанной
+    безопасностью ВСЕГО внешнего REST-запроса для Error.retryable и формирует UI-каталог, без business-switch
+    по коду. Unary transport errors используют прежний HTTP/error_spec реестр. Вложенный Status failed-result
+    не превращает успешное чтение/stream RPC в отказ; в initial result profile нет RequestRetryInfo/RetryInfo.
+    Новая попытка операции и доменные данные остаются во внешнем результате, не в общем механизме.
+    Внутренние additive Status поля не добавляются в клиентский JSON: BFF переносит валидный открытый reason
+    в code/error_code, даже если его нет в unary registry, и формирует безопасный текст. Нет Status — legacy
+    adapter; присутствующий невалидный Status — безопасный failed-result fallback/метрика: assistant terminal
+    code=INTERNAL_ERROR, failed history error_code=INTERNAL_ERROR (не null), import code=PROCESSING_FAILED;
+    legacy-код не читается. Явный внешний domain retryable сохраняется от сервиса независимо от ошибки.
+    Действия REST-реестра относятся к REST Error и явно описанным контекстам общего ErrorEvent; совпадение
+    reason в AnswerErrorEvent/StreamError/истории не включает REST auth/maintenance/quota или resume исходного Ask. Порядок dual-write/нового gen/go тега/rollback — docs/grpc-api.md5.4–5.5.
+
+    **Ошибки:** всегда один объект `error` (см. `ErrorResponse`). Порядок проверки:
+    503 (`MAINTENANCE`) → 400 `CLIENT_VERSION_UNSUPPORTED` → 401 (заголовок `Authorization`) → 400/413 проверки
+    `bank-bff` (нет `Idempotency-Key`, тело не по схеме, `Content-Length`) → ключ идемпотентности (сохранённый ответ
+    или 409) → 429 → 401 (токены запроса, которые проверяет сервис: `registration_token`, `refresh_token` в теле,
+    `X-Verification-Token` в заголовке; у потока статуса верификации ключа нет — шаг сразу после лимитов) → 400 →
+    404 → 403 → 413/422. У `POST /v1/statements` 413 `FILE_TOO_LARGE` сервиса — до ключа (под ключом не
+    сохраняется), остальные ответы сверяют ключ после приёма всего файла.
+    503 и 400 `CLIENT_VERSION_UNSUPPORTED` возможны у любой операции.
+
+    **SSE:** первым событием — текущее состояние целиком; после терминального события поток закрывается;
+    heartbeat `: ping` каждые 15 с; ошибки до начала потока — обычный HTTP-ответ с JSON. Неизвестный тип
+    события клиент игнорирует. События потока описаны расширением `x-sse-events` (имя события → схема `data`).
+    Веб-клиент читает поток через `fetch`, не `EventSource` (нужны заголовки).
+
+    **SSE — переподключение** (`docs/api.md`, «SSE»; FIN-159): поток, закрытый без терминального события, —
+    обрыв, клиент переоткрывает его. Базовая пауза d — 1 с, после каждого обрыва удваивается до 30 с; фактическая
+    пауза — случайная в [0,5·d; d]. d сбрасывается до 1 с, когда поток проработал без обрыва 30 с или пришло
+    терминальное событие (одного первого события мало). На 429 при переоткрытии — пауза до `retry_at`
+    (`Retry-After`) плюс случайные [0; 0,5·d]; d при этом удваивается, как после обрыва. Терминальное событие
+    `error` — только доменный исход потока; сбой сервера или транспорта посреди потока — закрытие без терминального
+    события, то есть обрыв по этому правилу.
+
+    При REST-отказе до открытия/переоткрытия SSE корректный error.retryable=false запрещает прямой повтор и
+    автоматическое переоткрытие в неизменённом контексте, даже по прежнему таймеру429/409. true разрешает повтор только при выполнении
+    условий ожидания, метода и окна ключа; отсутствующий/некорректный флаг сохраняет прежний безопасный алгоритм.
+    Корректирующие сценарии, обрыв без тела и доменный retryable помощника — отдельные правила. Успешный
+    auth-flow сохраняет предусмотренную отправку исходной операции с новым Authorization и ПРЕЖНИМ ключом
+    при доказанных safety/TTL. Известный MAINTENANCE сохраняет один контролируемый resume после Retry-After
+    в своём сценарии экрана техработ с тем же ключом и проверками; повторный отказ не запускает auto-loop.
+    Это не разрешение неизвестного кода или общего таймера; ввод пользователя сохраняется.
+
+    **Кодогенерация:** для SSE-операций (`streamPhoneVerification`, `streamStatementProgress`, `streamAnswer`)
+    генерируются только модели событий; сам поток клиент читает вручную (OkHttp SSE, `URLSession` bytes, `fetch`) —
+    сгенерированные клиенты читают тело целиком и блокируются до конца потока. На сервере эти маршруты
+    исключаются из валидации ответов kin-openapi (у неё нет декодера `text/event-stream`).
+
+    **Правила правки этого файла:** примитивные схемы (`Money`, `Month`, `PeriodKey`, открытые коды) в полях с
+    собственным описанием записываются целиком, без обёртки `allOf` — часть генераторов её не переносит;
+    необязательный объект-ссылка, который может быть `null`, — `type` + `nullable: true` + `allOf: [$ref]`
+    (без `type` по OAS 3.0.3 `null` не допускается). Новый `POST` с побочным эффектом обязан требовать
+    `Idempotency-Key`. Несовместимые изменения ловит oasdiff в CI.
+servers:
+- url: https://api.example.ru
+  description: Продакшн (адрес — заглушка, заменить)
+security:
+- bearerAuth: []
+tags:
+- name: auth
+  description: Вход по номеру телефона и обратному звонку
+- name: profile
+  description: Профиль, настройки, согласия
+- name: statements
+  description: Загрузка и история выписок
+- name: operations
+  description: Лента, поиск и правка операций
+- name: categories
+  description: Справочник категорий
+- name: analytics
+  description: Экран «Аналитика»
+- name: assistant
+  description: Помощник (Alice AI)
+paths:
+  /v1/auth/phone:
+    post:
+      tags:
+      - auth
+      operationId: startPhoneVerification
+      summary: Начать верификацию телефона
+      description: |
+        Создаёт заявку на подтверждение номера обратным звонком. До подтверждения API не сообщает,
+        зарегистрирован ли номер. Повтор с тем же `Idempotency-Key` возвращает ту же заявку и не расходует
+        лимит верификаций — в том числе после `expires_at` (ответ хранится 24 ч), поэтому новая заявка — с новым
+        ключом.
+
+        Ключ проверяется до лимитов: повтор с известным ключом и тем же телом получает сохранённый ответ без
+        проверок ниже; тот же ключ с другим телом — 409 `IDEMPOTENCY_CONFLICT`, а не 429. Для неизвестного ключа —
+        сначала лимиты верификаций на номер и на адрес (при превышении `retry_at` — срок лимита, занятость номера не
+        проверяется), затем занятость номера.
+
+        Провайдер не принимает повторную заявку на тот же номер до конца срока предыдущей, даже если по ней уже
+        вошли. Поэтому номер занят до `expires_at` последней заявки на него, закрыта она или нет (действующая заявка —
+        `pending` до `expires_at` или `verified` с неиспользованным результатом до 15 минут с подтверждения — отдельное
+        понятие, от неё зависит повторная доставка результата). Запрос с новым ключом на занятый номер — 429 `RATE_LIMITED` без обращения к провайдеру и без
+        `verification_token` чужой заявки; `error.retry_at` — `expires_at` последней заявки, округлённый вверх до целой
+        минуты (22:16:20 → 22:17:00). Отказ провайдера по дублю при свободном по БД номере — тоже 429, `retry_at` =
+        время запроса + 5 минут, округлённое вверх до минуты. 429 на дубль сохраняется под ключом до своего
+        `retry_at` (повтор с тем же ключом получает его с `Retry-After` от текущего момента, занятость не перепроверяется) и засчитывается в лимитах на
+        номер и на адрес — один ключ не больше одного раза на окно до `retry_at`. 429 по лимиту не сохраняется и
+        попытку не списывает.
+
+        Срок на устройстве: expires_in уменьшается по монотонному elapsed time с учётом сна; перевод часов
+        не перезапускает ожидание. Подпись «до ЧЧ:ММ» остаётся местной: часы получения плюс длительность.
+        Нет expires_in — приблизительный UI-fallback expires_at минус Date ТОГО ЖЕ свежего ответа, затем
+        вычитание elapsed time. Без свежего Date/монотонной базы — обновить состояние по существующему сценарию,
+        без точного countdown до обновления; старую duration не запускать снова (info.description).
+
+        Клиент со своей действующей заявкой (`pending` или `verified` с неиспользованным результатом) новую на тот же
+        номер не создаёт. Номер подтверждения показывает, только пока своя заявка `pending` и её срок на устройстве не
+        прошёл; убирает при `expired`, при наступлении срока на устройстве по таймеру (переоткрывает поток: `expired` или 401
+        `INVALID_TOKEN` — конец заявки, `pending` — вернуть номер и ждать по потоку) и при 429,
+        полученном без своей действующей заявки.
+      security: []
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartPhoneVerificationRequest'
+            example:
+              phone: '+79001234567'
+      responses:
+        '200':
+          description: Заявка создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhoneVerification'
+              example:
+                verification_token: vt_9mQ2x7LpR4aZ8cN1kT6wY3eB5uH0jV2sD4fG7hK9lP1
+                callback_number: '+74951234567'
+                expires_at: '2026-10-04T22:17:00+03:00'
+                expires_in: 300
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/auth/phone/events:
+    get:
+      tags:
+      - auth
+      operationId: streamPhoneVerification
+      summary: Статус верификации (SSE)
+      description: |
+        Поток статуса заявки. Клиент открывает его после `ACTION_DIAL` и переоткрывает при возврате из фона.
+        Первое событие — текущий статус. Результат `verified` доступен 15 минут с момента подтверждения звонком (не до
+        `expires_at`): переподключение с тем же токеном отдаёт те же токены. Заявка закрывается первым
+        `/v1/auth/token` с выданным refresh или `/v1/auth/register`; после этого, после 15 минут с подтверждения и для
+        `pending` — после `expires_at` — 401 `INVALID_TOKEN`.
+
+        Лимит запросов (попыток подключения) за окно на адрес клиента, как у 1.3 и 1.4 (значение задаёт сервер;
+        считаются и попытки, отклонённые по токену): сверх него — 429 `RATE_LIMITED` с
+        `error.retry_at` до начала потока и до проверки `X-Verification-Token`.
+        Корректный REST error.retryable=false запрещает повторное открытие после этого отказа; при true клиент
+        ждёт retry_at и проверяет условия заявки, при отсутствующем/некорректном флаге — прежний безопасный сценарий.
+
+        Терминальные события: `status` с `verified` или `expired`.
+        Переподключение после обрыва — по правилу «SSE — переподключение» (`info.description`).
+      security:
+      - verificationToken: []
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Поток событий
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: 'SSE-поток. События: `status` → `PhoneVerificationStatusEvent`, `error` → `ErrorEvent`.'
+              example: |
+                event: status
+                data: {"status": "pending"}
+
+                event: status
+                data: {"status": "verified", "is_new_user": true, "registration_token": "reg_..."}
+          x-sse-events:
+            status:
+              $ref: '#/components/schemas/PhoneVerificationStatusEvent'
+            error:
+              $ref: '#/components/schemas/ErrorEvent'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/auth/register:
+    post:
+      tags:
+      - auth
+      operationId: register
+      summary: Регистрация нового пользователя
+      description: |
+        Вызывается с экрана согласия на обработку ПДн после подтверждения нового номера.
+        `registration_token` расходуется только ответом `201`; после ошибки 4xx его можно отправить снова
+        (с новым `Idempotency-Key`, если тело изменилось). Повтор с тем же ключом возвращает тот же `201`.
+        Лимит запросов на адрес клиента (значение задаёт сервер) проверяется до `registration_token`: сверх него —
+        429 `RATE_LIMITED`.
+      security: []
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              registration_token: reg_...
+              pd_consent_accepted: true
+              pd_consent_version: '2026-09-28'
+              timezone: Europe/Moscow
+      responses:
+        '201':
+          description: Пользователь создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+              example:
+                access_token: eyJ...
+                refresh_token: rt_...
+                user_id: 01a107db-ae80-7b07-b8a1-a8c8486e2532
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/auth/token:
+    post:
+      tags:
+      - auth
+      operationId: refreshTokens
+      summary: Обновить токены
+      description: |
+        Ротация refresh-токена. Повторное использование старого refresh отзывает всю цепочку сессии —
+        кроме повтора с тем же `Idempotency-Key` в течение 60 секунд: тогда возвращается та же новая пара.
+        Лимит запросов на адрес клиента (значение задаёт сервер) проверяется до `refresh_token`: сверх него — 429
+        `RATE_LIMITED`.
+      security: []
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Новая пара токенов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+              example:
+                access_token: eyJ...
+                refresh_token: rt_new_...
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/auth/logout:
+    post:
+      tags:
+      - auth
+      operationId: logout
+      summary: Выход
+      description: Завершает сессию. Повтор возвращает `204`.
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '204':
+          description: Сессия завершена
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/consents/{type}:
+    get:
+      tags:
+      - auth
+      - profile
+      operationId: getConsentDocument
+      summary: Текущая версия документа согласия
+      description: |
+        `personal_data` — без токена (экран согласия до регистрации); `assistant` — с токеном.
+        Клиент не зашивает версию: после `CONSENT_OUTDATED` запрашивает документ заново.
+      security:
+      - {}
+      - bearerAuth: []
+      parameters:
+      - name: type
+        in: path
+        required: true
+        description: 'Тип документа: `personal_data`, `assistant`. Неизвестный тип — 404.'
+        schema:
+          type: string
+          x-extensible-enum:
+          - personal_data
+          - assistant
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Документ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsentDocument'
+              example:
+                type: personal_data
+                version: '2026-09-28'
+                title: Согласие на обработку персональных данных
+                url: https://example.ru/legal/pd-consent/2026-09-28
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/profile:
+    get:
+      tags:
+      - profile
+      operationId: getProfile
+      summary: Профиль
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Профиль
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+              example:
+                user_id: 01a107db-ae80-7b07-b8a1-a8c8486e2532
+                phone: '+79161234567'
+                theme: system
+                timezone: Europe/Moscow
+                consents:
+                - type: assistant
+                  granted: false
+                  current_version: '2026-09-28'
+                created_at: '2026-10-04T20:00:00+03:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    patch:
+      tags:
+      - profile
+      operationId: updateProfile
+      summary: Обновить настройки
+      description: |
+        Любое подмножество полей. Смена `timezone` запускает фоновый пересчёт помесячной аналитики;
+        пока он идёт, `/v1/analytics` отдаёт `state.recalculating: true`.
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileUpdate'
+            example:
+              theme: dark
+      responses:
+        '200':
+          description: Обновлённый профиль
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    delete:
+      tags:
+      - profile
+      operationId: deleteAccount
+      summary: Удалить аккаунт
+      description: |
+        Клиент подтверждает действие код-паролем или биометрией локально, затем вызывает. Сервер удаляет все
+        данные во всех сервисах, включая файлы выписок. Повтор после успешного удаления — тоже `204`.
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '204':
+          description: Аккаунт удалён
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/profile/assistant-consent:
+    put:
+      tags:
+      - profile
+      operationId: grantAssistantConsent
+      summary: Дать согласие помощнику
+      description: Только с экрана согласия после галочки. Повтор с той же версией ничего не меняет.
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssistantConsentGrant'
+            example:
+              version: '2026-09-28'
+      responses:
+        '200':
+          description: Профиль с действующим согласием
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    delete:
+      tags:
+      - profile
+      operationId: revokeAssistantConsent
+      summary: Отозвать согласие помощнику
+      description: Переключатель в профиле, без диалога. Повтор — тоже `204`. История ответов остаётся.
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '204':
+          description: Согласие отозвано
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/statements/config:
+    get:
+      tags:
+      - statements
+      operationId: getImportConfig
+      summary: Конфигурация импорта
+      description: Для экрана «Загрузка выписки».
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Конфигурация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportConfig'
+              example:
+                download_url: https://www.tbank-online.com/...
+                login_url: https://www.tbank.ru/login/
+                max_file_size_bytes: 10485760
+                accepted_formats:
+                - OFX
+                suggested_period:
+                  from: '2025-10-04T00:00:00+03:00'
+                  to: '2026-10-05T00:00:00+03:00'
+                loaded:
+                  first_operation_at: '2026-09-01T08:15:00+03:00'
+                  last_operation_at: '2026-09-25T21:40:00+03:00'
+                  operation_count: 181
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/statements:
+    get:
+      tags:
+      - statements
+      operationId: listStatements
+      summary: История загрузок
+      description: Для «Истории загрузок» и строки «Выписка» в профиле.
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Загрузки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatementsList'
+              example:
+                summary:
+                  upload_count: 3
+                  operation_count: 1086
+                  first_operation_at: '2026-04-01T09:12:00+03:00'
+                  last_operation_at: '2026-09-25T21:40:00+03:00'
+                  gaps:
+                  - from: '2026-07-11T00:00:00+03:00'
+                    to: '2026-07-20T00:00:00+03:00'
+                uploads:
+                - upload_id: 01a10812-9d00-77d9-8c3d-b350e0119cd5
+                  file_name: operations_2026.ofx
+                  status: done
+                  uploaded_at: '2026-10-01T10:15:00+03:00'
+                  operation_count: 1086
+                  unread_count: 0
+                  resolved_unread_count: 2
+                  resolved_by_uploaded_at: '2026-10-12T10:05:00+03:00'
+                  period_from: '2026-04-01'
+                  period_to: '2026-09-30'
+                  source_name: Выписка Т-Банка
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    post:
+      tags:
+      - statements
+      operationId: uploadStatement
+      summary: Загрузить выписку
+      description: |
+        Синхронно, до `202`, проверяется видимое без разбора: размер, формат по содержимому, банк по заголовку
+        OFX. Ошибки — обычным HTTP-ответом, загрузка не создаётся: `FILE_TOO_LARGE` (413), `CSV_NOT_ACCEPTED`,
+        `WRONG_FORMAT`, `WRONG_BANK` (422). Ошибки разбора операций — событием `error` в потоке прогресса.
+        Повтор с тем же `Idempotency-Key` возвращает ту же загрузку; тело сравнивается по хешу содержимого файла
+        и его имени — тот же ключ с тем же файлом под другим именем даёт 409 `IDEMPOTENCY_CONFLICT`.
+        Ключ сверяется после приёма всего файла; 413 `FILE_TOO_LARGE` отдаётся раньше, не дочитывая файл,
+        и под ключом не сохраняется — повтор с тем же ключом получает его заново.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: OFX-файл до `max_file_size_bytes`. Имя файла из `Content-Disposition` сохраняется и показывается
+                    в «Истории загрузок».
+            encoding:
+              file:
+                contentType: application/x-ofx, application/octet-stream
+      responses:
+        '202':
+          description: Файл принят, разбор запущен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadAccepted'
+              example:
+                upload_id: 01a10812-9d00-77d9-8c3d-b350e0119cd5
+                file_name: operations_2026.ofx
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/statements/{upload_id}:
+    delete:
+      tags:
+      - statements
+      operationId: deleteStatement
+      summary: Удалить загрузку или прервать разбор
+      description: |
+        `done` — удаляет операции, которых нет в других загрузках, и файл; ручные правки категорий у оставшихся
+        операций сохраняются; аналитика пересчитывается асинхронно. `processing` — разбор прерывается, ничего не
+        сохраняется, поток прогресса завершается событием `error` с кодом `CANCELLED`.
+        Повтор для уже удалённой загрузки — `204`; `404` — только если такой загрузки никогда не было.
+      parameters:
+      - $ref: '#/components/parameters/UploadId'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '204':
+          description: Удалено
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/statements/{upload_id}/progress:
+    get:
+      tags:
+      - statements
+      operationId: streamStatementProgress
+      summary: Прогресс обработки (SSE)
+      description: |
+        Первое событие — текущее состояние: `progress`, а если разбор уже закончен — сразу `complete` или `error`.
+        Разбор, не завершившийся за 3 минуты с начала (в том числе прерванный сбоем сервера), завершается
+        `PROCESSING_FAILED`; переподключение после этого сразу отдаёт `error`.
+        Терминальные события: `complete`, `error` (`PROCESSING_FAILED`, `CANCELLED`; неизвестный код — по
+        корректному `user_message`, без него — общая ошибка разбора). Импорт атомарный: при ошибке ни одна операция не сохранена, файл удалён.
+        Переподключение после обрыва — по правилу «SSE — переподключение» (`info.description`).
+      parameters:
+      - $ref: '#/components/parameters/UploadId'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Поток событий
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: 'SSE-поток. События: `progress` → `ImportProgressEvent`, `complete` → `ImportResult`, `error`
+                  → `StreamError`.'
+              example: |
+                event: progress
+                data: {"stage": "parsing", "percent": 20}
+
+                event: error
+                data: {"code": "PROCESSING_FAILED", "message": "..."}
+          x-sse-events:
+            progress:
+              $ref: '#/components/schemas/ImportProgressEvent'
+            complete:
+              $ref: '#/components/schemas/ImportResult'
+            error:
+              $ref: '#/components/schemas/StreamError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/statements/unread-lines:
+    get:
+      tags:
+      - statements
+      operationId: listUnreadLines
+      summary: Непрочитанные строки
+      description: |
+        Шторка «Непрочитанные строки»: по загрузке (`upload_id`) или по периоду (`from` + `to`) — ровно одно из
+        двух, иначе 400 `VALIDATION_ERROR`. Содержимого строк нет — оно не хранится.
+
+        Только незакрытые строки: строки, дочитанные более поздней загрузкой или заменённые её записью, не
+        возвращаются ни по загрузке, ни по периоду (api.md 3.6, «Закрытие строк»; FIN-79).
+
+        «Сообщить нам» эндпоинта не имеет: клиент открывает `mailto:` на адрес поддержки с `user_id`,
+        `upload_id`, `file_name`, номерами строк и `reason`.
+      parameters:
+      - name: upload_id
+        in: query
+        description: Строки одной загрузки.
+        schema:
+          type: string
+      - name: from
+        in: query
+        description: Начало периода; строки, разобранная дата которых попадает в период. Строки без даты сюда не попадают.
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        description: Конец периода (исключительно).
+        schema:
+          type: string
+          format: date-time
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Строки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnreadLinesList'
+              example:
+                lines:
+                - upload_id: 01a10812-9d00-77d9-8c3d-b350e0119cd5
+                  file_name: operations_2026.ofx
+                  line_number: 412
+                  date: '2026-09-03T00:00:00+03:00'
+                  reason: bad_amount
+                  reason_name: не распознали сумму
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/operations:
+    get:
+      tags:
+      - operations
+      operationId: listOperations
+      summary: Лента и поиск операций
+      description: |
+        **Лента** — без фильтров: порции по 3 календарных месяца, новые первыми; следующая порция — с `before`
+        из `next_before`. **Поиск** — передан хотя бы один фильтр: вся выборка одним ответом (до 10 000 операций,
+        больше — 422 `TOO_MANY_RESULTS`). Без периода и без `all_time` поиск идёт за последние 12 месяцев.
+        `before` вместе с фильтрами, `all_time` вместе с `from`/`to` — 400.
+      parameters:
+      - name: from
+        in: query
+        description: Начало периода (включительно). Можно передать одну границу.
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        description: Конец периода (исключительно).
+        schema:
+          type: string
+          format: date-time
+      - name: all_time
+        in: query
+        description: Искать за всё время, без периода по умолчанию. Вместе с `from`/`to` — 400.
+        schema:
+          type: boolean
+      - name: q
+        in: query
+        description: |
+          Текст из строки поиска, условия через «или»: подстрока в описании; название итоговой категории или
+          категории банка; точная сумма, если `q` — число («1520», «1 520», «1520,50»); последние 4 цифры счёта.
+          Без учёта регистра, «ё» = «е». Набор полей расширяемый.
+        schema:
+          type: string
+      - name: category_id
+        in: query
+        description: |
+          Категория. Без `transfer_mode` — итоговая категория операции. С `transfer_mode` — категория в
+          аналитике: в выборку входят и возвраты, которые эту категорию уменьшили.
+        schema:
+          type: string
+      - name: kind
+        in: query
+        description: |
+          `expense` — только расходы, `income` — только доходы. Переводы между своими счетами не входят ни в
+          один. С `transfer_mode` возвраты относятся к расходам. Открытый код (FIN-82): клиент передаёт и значение,
+          которого сам не знает, если получил его в `operations_filter`; неизвестное серверу — 400.
+        schema:
+          $ref: '#/components/schemas/OperationKindCode'
+      - name: amount_from
+        in: query
+        description: Сумма операции не меньше, копейки.
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: amount_to
+        in: query
+        description: Сумма операции не больше, копейки.
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: transfer_mode
+        in: query
+        description: |
+          Выборка по правилам «Аналитики»: `with` — без «Между своими счетами»; `without` — ещё и без переводов.
+          Неизвестное значение сервер отклоняет 400.
+        schema:
+          $ref: '#/components/schemas/TransferMode'
+      - name: selection
+        in: query
+        description: |
+          Непрозрачная выборка из `OperationsFilter` (карточка «Аналитики», продавец из ответа помощника,
+          операции без категории). Клиент её не конструирует. Периода не содержит, действует бессрочно.
+          Недействительная — 422 `SELECTION_NOT_FOUND`, клиент открывает Поиск без неё.
+        schema:
+          type: string
+      - name: before
+        in: query
+        description: Только в ленте — вернуть 3 календарных месяца до этого момента. Только начало месяца в поясе
+          профиля (значение next_before); другой момент или вместе с фильтрами — 400.
+        schema:
+          type: string
+          format: date-time
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Порция ленты или результаты поиска
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationsList'
+              examples:
+                feed:
+                  summary: Лента
+                  value:
+                    items:
+                    - id: 01a10812-a0e8-765b-89e4-a4314a43656f
+                      kind: expense
+                      occurred_at: '2026-09-25T19:11:00+03:00'
+                      amount: 234000
+                      currency: RUB
+                      title: Пятёрочка
+                      category_id: cat_supermarkets
+                      category_name: Супермаркеты
+                      category_icon: cart
+                      is_category_manual: false
+                      note: null
+                      account:
+                        type_name: Текущий
+                        mask: ··4821
+                      status: posted
+                    - id: 01a10812-a0e9-7c41-8d2a-5f0e3b7c9a12
+                      kind: own_transfer
+                      occurred_at: '2026-09-18T09:30:00+03:00'
+                      amount: 2000000
+                      currency: RUB
+                      title: Перевод между счетами
+                      category_id: cat_own_transfer
+                      category_name: Между своими счетами
+                      category_icon: transfer
+                      is_category_manual: false
+                      note: не в тратах
+                      from_account:
+                        type_name: Накопительный
+                        mask: ··0734
+                      to_account:
+                        type_name: Текущий
+                        mask: ··4821
+                      status: posted
+                    summary:
+                    - month: '2026-09'
+                      range:
+                        from: '2026-09-01T00:00:00+03:00'
+                        to: '2026-10-01T00:00:00+03:00'
+                      expense: 8432000
+                      income: 15690000
+                      data_to: '2026-09-25T21:40:00+03:00'
+                    state:
+                      stale: false
+                      data_to: '2026-09-26T00:00:00+03:00'
+                      last_operation_at: '2026-09-25T21:40:00+03:00'
+                      last_uploaded_at: '2026-09-25T21:50:00+03:00'
+                    range:
+                      from: '2026-08-01T00:00:00+03:00'
+                      to: '2026-11-01T00:00:00+03:00'
+                    next_before: '2026-08-01T00:00:00+03:00'
+                search:
+                  summary: Поиск (сокращено до одной записи)
+                  value:
+                    items:
+                    - id: 01a10812-a0f1-7b3c-9e2d-4a6f8c1e3b57
+                      kind: expense
+                      occurred_at: '2026-09-24T20:05:00+03:00'
+                      amount: 82000
+                      currency: RUB
+                      title: Самокат
+                      category_id: cat_supermarkets
+                      category_name: Супермаркеты
+                      category_icon: cart
+                      is_category_manual: false
+                      note: null
+                      account:
+                        type_name: Текущий
+                        mask: ··4821
+                      status: posted
+                    total_count: 9
+                    range:
+                      from: '2025-10-05T00:00:00+03:00'
+                      to: '2026-10-06T00:00:00+03:00'
+                    has_older_data: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/operations/{id}:
+    get:
+      tags:
+      - operations
+      operationId: getOperation
+      summary: Детали операции
+      description: Необязательные поля приходят, только если источник их поставляет; клиент показывает строку по наличию поля.
+      parameters:
+      - $ref: '#/components/parameters/OperationId'
+      - name: occurred_at
+        in: query
+        required: true
+        description: Время совершения записи — значение `occurred_at` из записи списка или поиска (`listOperations`)
+          как есть; у пары — время списания. `+` в смещении кодируется как `%2B`. Нет — 400 `VALIDATION_ERROR`.
+          Неверное время — не ошибка — сервер ищет запись по ID за всё время (FIN-202).
+        schema:
+          type: string
+          format: date-time
+        example: '2026-09-25T19:11:00+03:00'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Операция
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationDetails'
+              example:
+                id: 01a10812-a0e8-765b-89e4-a4314a43656f
+                kind: expense
+                occurred_at: '2026-09-25T19:11:00+03:00'
+                posted_at: null
+                amount: 234000
+                currency: RUB
+                title: Пятёрочка
+                description: Пятёрочка
+                category_id: cat_supermarkets
+                category_name: Супермаркеты
+                category_icon: cart
+                is_category_manual: false
+                note: null
+                note_details: null
+                bank_category: Супермаркеты
+                account:
+                  type_name: Текущий
+                  mask: ··4821
+                  spoken: текущий счёт, последние цифры 4821
+                status: posted
+                source_name: Выписка Т-Банка
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    patch:
+      tags:
+      - operations
+      operationId: changeOperationCategory
+      summary: Сменить категорию
+      description: |
+        - Обычная операция: меняется её категория, `items` — одна запись.
+        - Пара `own_transfer`: смена на любую категорию, кроме «Между своими счетами», разделяет пару на две
+          операции. Выбранная категория — стороне, к которой подходит (расходная — списанию, доходная —
+          зачислению, подходящая к обеим — списанию); другая сторона получает категорию банка.
+          `items` — две операции, `replaced_id` — ID пары.
+        - Операция с категорией «Между своими счетами», у которой нашлась вторая сторона, становится парой:
+          `items` — пара, `replaced_id` — ID операции.
+
+        Ручная правка не перетирается при повторном импорте. Аналитика за затронутый месяц пересчитывается
+        асинхронно.
+      parameters:
+      - $ref: '#/components/parameters/OperationId'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeCategoryRequest'
+            example:
+              category_id: cat_restaurants
+              occurred_at: '2026-09-25T19:11:00+03:00'
+      responses:
+        '200':
+          description: Изменённые записи
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeCategoryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/categories:
+    get:
+      tags:
+      - categories
+      operationId: listCategories
+      summary: Справочник категорий
+      description: Для выбора категории, иконок и подписей. Клиент кэширует и перечитывает при запуске приложения, после
+        каждой успешной загрузки (`complete` в `streamStatementProgress`) и при ответе 422 `CATEGORY_NOT_ASSIGNABLE` — новая
+        категория банка появляется при первой встрече в выписке, а у известной может смениться `kinds`.
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Категории в порядке отображения
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoriesList'
+              example:
+                categories:
+                - id: cat_own_transfer
+                  name: Между своими счетами
+                  icon: transfer
+                  is_system: true
+                  kinds:
+                  - expense
+                  - income
+                  assignable: true
+                  note: не в тратах
+                - id: cat_refund
+                  name: Возврат
+                  icon: repeat
+                  is_system: true
+                  kinds:
+                  - income
+                  assignable: true
+                  note: уменьшает расходы на покупку
+                - id: cat_uncategorized
+                  name: Без категории
+                  icon: tag
+                  is_system: true
+                  kinds:
+                  - expense
+                  - income
+                  assignable: false
+                  note: в выписке нет категории
+                - id: cat_supermarkets
+                  name: Супермаркеты
+                  icon: cart
+                  is_system: false
+                  kinds:
+                  - expense
+                  assignable: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/analytics:
+    get:
+      tags:
+      - analytics
+      operationId: getAnalytics
+      summary: Аналитика за период
+      description: |
+        Экран — упорядоченный список блоков общего каталога (FIN-4). Пороги, блокировки, базы расчёта, устаревание и
+        тексты сервер вычисляет сам; клиент только рисует блоки. При `has_data: false` остальных полей нет.
+      parameters:
+      - name: period
+        in: query
+        description: |
+          `month` (по умолчанию), `quarter`, `year`. Набор расширяемый (например, `week`) — новое значение
+          появляется вместе с новым форматом `PeriodKey`; клиент запрашивает только известные ему значения.
+        schema:
+          type: string
+          description: 'Тип периода: `month`, `quarter`, `year`. Открытый набор: клиент запрашивает только известные значения.'
+          x-extensible-enum:
+          - month
+          - quarter
+          - year
+          default: month
+      - name: date
+        in: query
+        description: |
+          Период в поясе профиля. Может быть точнее `period`: `period=quarter&date=2026-09` — квартал, в который
+          входит сентябрь; ответ содержит точный ключ (`2026-Q3`). Без параметра — последний период с данными.
+        schema:
+          $ref: '#/components/schemas/PeriodKey'
+      - name: transfer_mode
+        in: query
+        description: '`with` (по умолчанию) или `without`. Неизвестное значение сервер отклоняет 400.'
+        schema:
+          type: string
+          description: |
+            Режим учёта переводов: `with` — с переводами, `without` — без переводов людям (входящих и исходящих).
+            «Между своими счетами» исключается в обоих режимах. В запросах неизвестное значение сервер отклоняет 400;
+            в ответах неизвестное значение клиент обрабатывает как `with`. Отсутствие поля в фильтре Поиска значит
+            «без правил аналитики», а не `with`.
+          x-extensible-enum:
+          - with
+          - without
+          default: with
+      - name: supports
+        in: query
+        description: |
+          Примитивы, которые умеет рисовать клиент: `type@v` через запятую (`tile_group@1,chart@1`). Сервер отдаёт
+          только совместимые блоки (при возможности — в поддерживаемой версии или более простым примитивом). Без
+          параметра — версия 1 всех типов каталога.
+        schema:
+          type: string
+          example: heading@1,text@1,rows@1,chart@1,tile_group@1,ranked_list@1,insight_card@1
+      - name: exp
+        in: query
+        description: |
+          Варианты экспериментов над составом экрана из RuStore Remote Config: `key:variant` через запятую
+          (`analytics_order:b`). Неизвестный ключ или вариант сервер игнорирует (FIN-9).
+        schema:
+          type: string
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Аналитика
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Analytics'
+              example:
+                {
+                  "has_data": true,
+                  "params": {
+                    "period": "month",
+                    "date": "2026-09",
+                    "transfer_mode": "with"
+                  },
+                  "period": {
+                    "range": {
+                      "from": "2026-09-01T00:00:00+03:00",
+                      "to": "2026-10-01T00:00:00+03:00"
+                    },
+                    "is_current": true,
+                    "coverage": "partial",
+                    "data_from": "2026-09-01T00:00:00+03:00",
+                    "data_to": "2026-09-25T21:40:00+03:00",
+                    "gaps": []
+                  },
+                  "navigation": {
+                    "previous": null,
+                    "next": null
+                  },
+                  "currency": "RUB",
+                  "blocks": [
+                    {
+                      "id": "tiles",
+                      "type": "tile_group",
+                      "v": 1,
+                      "alt_text": "Доходы минус расходы 72 580 ₽, прогноз расходов около 101 200 ₽, расходы в день 3 372,80 ₽, доходы 156 900 ₽",
+                      "data": {
+                        "tiles": [
+                          {
+                            "id": "balance",
+                            "title": "Доходы минус расходы",
+                            "value": 7258000,
+                            "value_kind": "amount",
+                            "caption": "46% дохода · по выписке"
+                          },
+                          {
+                            "id": "forecast",
+                            "title": "Прогноз расходов на сентябрь",
+                            "value": 10120000,
+                            "value_kind": "amount",
+                            "approx": true,
+                            "caption": "к 30 сентября"
+                          },
+                          {
+                            "id": "daily_expense",
+                            "title": "Расходы в день",
+                            "value": 337280,
+                            "value_kind": "amount",
+                            "caption": "в среднем за 1–25 сентября"
+                          },
+                          {
+                            "id": "income",
+                            "title": "Доходы",
+                            "value": 15690000,
+                            "value_kind": "amount",
+                            "show_plus": true,
+                            "action": {
+                              "type": "open_operations",
+                              "filter": {
+                                "from": "2026-09-01T00:00:00+03:00",
+                                "to": "2026-10-01T00:00:00+03:00",
+                                "kind": "income",
+                                "transfer_mode": "with"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "id": "expense_categories",
+                      "type": "ranked_list",
+                      "v": 1,
+                      "title": "Расходы по категориям",
+                      "alt_text": "Расходы 84 320 ₽: Супермаркеты 32 400 ₽, 38% …",
+                      "data": {
+                        "total": {
+                          "label": "Всего · 1–25 сентября",
+                          "value": 8432000,
+                          "value_kind": "amount",
+                          "action": {
+                            "type": "open_operations",
+                            "filter": {
+                              "from": "2026-09-01T00:00:00+03:00",
+                              "to": "2026-10-01T00:00:00+03:00",
+                              "kind": "expense",
+                              "transfer_mode": "with"
+                            }
+                          }
+                        },
+                        "items": [
+                          {
+                            "id": "cat_supermarkets",
+                            "icon": "cart",
+                            "title": "Супермаркеты",
+                            "note": "28 операций",
+                            "value": 3240000,
+                            "value_kind": "amount",
+                            "share": 0.38,
+                            "action": {
+                              "type": "open_operations",
+                              "filter": {
+                                "from": "2026-09-01T00:00:00+03:00",
+                                "to": "2026-10-01T00:00:00+03:00",
+                                "category_id": "cat_supermarkets",
+                                "kind": "expense",
+                                "transfer_mode": "with"
+                              }
+                            }
+                          }
+                        ],
+                        "visible_count": 4,
+                        "more_label": "Все категории"
+                      }
+                    },
+                    {
+                      "type": "heading",
+                      "v": 1,
+                      "data": {
+                        "text": "Регулярные платежи и заметные траты"
+                      }
+                    },
+                    {
+                      "id": "bank_fees",
+                      "type": "insight_card",
+                      "v": 1,
+                      "alt_text": "Комиссии и проценты банку за сентябрь: 1 240 ₽",
+                      "data": {
+                        "icon": "percent",
+                        "title": "Комиссии и проценты банку",
+                        "value": 124000,
+                        "value_kind": "amount",
+                        "description": "за сентябрь · обслуживание, переводы, снятие наличных"
+                      },
+                      "action": {
+                        "type": "open_operations",
+                        "filter": {
+                          "from": "2026-09-01T00:00:00+03:00",
+                          "to": "2026-10-01T00:00:00+03:00",
+                          "selection": "s_bank_fees",
+                          "selection_name": "Комиссии и проценты банку",
+                          "transfer_mode": "with"
+                        }
+                      }
+                    }
+                  ],
+                  "state": {
+                    "stale": false,
+                    "last_operation_at": "2026-09-25T21:40:00+03:00",
+                    "data_from": "2026-09-01T00:00:00+03:00",
+                    "data_to": "2026-09-26T00:00:00+03:00",
+                    "full_months": 0,
+                    "unread_lines_count": 0,
+                    "calculated_at": "2026-09-25T21:52:00+03:00",
+                    "recalculating": false
+                  }
+                }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/analytics/periods:
+    get:
+      tags:
+      - analytics
+      operationId: listAnalyticsPeriods
+      summary: Периоды с данными
+      description: Для шторки выбора периода. Периоды, где есть хоть один день, покрытый периодом выписки (`DTSTART..DTEND`)
+        хотя бы одной загрузки, — даже без операций. Без пагинации — даже за 10 лет это 120 месяцев. Клиент запрашивает при открытии
+        шторки.
+      parameters:
+      - name: period
+        in: query
+        description: Тип периода, как в `getAnalytics`.
+        schema:
+          type: string
+          description: 'Тип периода: `month`, `quarter`, `year`. Открытый набор: клиент запрашивает только известные значения.'
+          x-extensible-enum:
+          - month
+          - quarter
+          - year
+          default: month
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Периоды, новые первыми
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsPeriodsList'
+              example:
+                periods:
+                - key: '2026-09'
+                  range:
+                    from: '2026-09-01T00:00:00+03:00'
+                    to: '2026-10-01T00:00:00+03:00'
+                  coverage: partial
+                - key: '2026-08'
+                  range:
+                    from: '2026-08-01T00:00:00+03:00'
+                    to: '2026-09-01T00:00:00+03:00'
+                  coverage: complete
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/analytics/regular-payments/{id}/dismissal:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      description: ID регулярного платежа (`RegularPayment.id`), стабилен между пересчётами. ID по общему правилу (сейчас
+        UUIDv7, соответствие ключа платежа и ID хранит сервер), а не описание операции и не его кодирование — описание
+        является персональными данными и в URL и логи не попадает. Не UUID — 400 `VALIDATION_ERROR`.
+      schema:
+        type: string
+        pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+    put:
+      tags:
+      - analytics
+      operationId: dismissRegularPayment
+      summary: «Не подписка»
+      description: |
+        Платёж исчезает из карточки, итог пересчитывается. Отметка привязана к ключу платежа — описанию
+        операции из выписки (точное совпадение), а не к периоду. Пока итог не пересчитан, `getAnalytics` отдаёт `state.recalculating: true`.
+        Идемпотентно.
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '204':
+          description: Отмечено
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    delete:
+      tags:
+      - analytics
+      operationId: restoreRegularPayment
+      summary: Вернуть платёж в карточку
+      description: В MVP в интерфейсе нет — для поддержки и будущей отмены. Идемпотентно.
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '204':
+          description: Отметка снята
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/assistant/messages:
+    get:
+      tags:
+      - assistant
+      operationId: listMessages
+      summary: История сообщений
+      description: |
+        Один непрерывный диалог, старые сообщения первыми. Ответ, заменённый повтором, в истории не возвращается.
+      parameters:
+      - name: limit
+        in: query
+        description: Сообщений в ответе.
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 20
+      - name: before_id
+        in: query
+        description: Вернуть сообщения старше этого; без параметра — самые новые.
+        schema:
+          type: string
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Сообщения
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagesList'
+              example:
+                messages:
+                - id: 01a10852-b340-77c5-9ba3-bb9964a666d0
+                  role: user
+                  currency: RUB
+                  text: Сколько я трачу на Самокат?
+                  created_at: '2026-10-04T22:10:00+03:00'
+                - id: 01a10852-b341-7a10-8f3e-6c2d9b4a1e07
+                  role: assistant
+                  currency: RUB
+                  status: complete
+                  charged: true
+                  blocks:
+                  - type: text
+                    v: 1
+                    data:
+                      text: За апрель — сентябрь на Самокат ушло **7 200 ₽**, все операции — с июля.
+                  - type: rows
+                    v: 1
+                    alt_text: 'Операций: 9. Средний чек: 800 ₽'
+                    data:
+                      rows:
+                      - label: Операций
+                        value: 9
+                        value_kind: count
+                      - label: Средний чек
+                        value: 80000
+                        value_kind: amount
+                  chips:
+                  - label: Самокат · 9 операций
+                    screen: operations
+                    filters:
+                      selection: s_merchant_7f3a
+                      selection_name: Самокат
+                      from: '2026-04-01T00:00:00+03:00'
+                      to: '2026-10-01T00:00:00+03:00'
+                      transfer_mode: with
+                  - label: Аналитика за сентябрь
+                    screen: analytics
+                    params:
+                      period: month
+                      date: '2026-09'
+                      transfer_mode: with
+                  source:
+                    calculated_at: '2026-09-25T19:11:00+03:00'
+                    data_range:
+                      from: '2026-04-01T00:00:00+03:00'
+                      to: '2026-10-01T00:00:00+03:00'
+                    transfer_mode: with
+                    changed_since: []
+                  created_at: '2026-10-04T22:10:05+03:00'
+                has_older: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    post:
+      tags:
+      - assistant
+      operationId: askAssistant
+      summary: Задать вопрос
+      description: |
+        Создаёт вопрос и запускает генерацию ответа на сервере; ответ читается потоком `streamAnswer`.
+        Попытка списывается при создании вопроса. Повтор с тем же `Idempotency-Key` не создаёт второй вопрос и
+        не списывает попытку. Сохранённый успешный результат ключа воспроизводится до проверки лимита OFF_TOPIC.
+        Отказы `CONSENT_REQUIRED`, `LIMIT_EXCEEDED` и `RATE_LIMITED` не сохраняются под ключом.
+
+        Отдельная защита OFF_TOPIC (FIN-222): начальные конфигурационные значения assistant — 5 терминальных
+        исходов за скользящие 7×24 часа после последнего сброса. Каждый случай учитывается один раз с завершения
+        ответа; в момент completed_at + 7 суток он уже исключён. При числе случаев не меньше 5 новые вопросы и
+        повторы блокируются: 429 `RATE_LIMITED`, без создания вопроса/ответа, вызова модели и списания попытки.
+        `error.retry_at` — момент снижения числа уже сохранённых случаев ниже порога; при 5 случаях это первое
+        истечение, при 7 — третье. `Retry-After` — положительная задержка до него.
+        Уже принятые генерации продолжаются; новые OFF_TOPIC могут сдвинуть срок позже. Сброс всех случаев — только успешный финансовый `complete` с `charged: true`,
+        в том числе уже запущенный ответ; он может снять блокировку раньше `retry_at`. Прочие исходы, включая
+        `complete` с `charged: false`, не сбрасывают счётчик. Одновременные завершения упорядочиваются по пользователю:
+        случаи до сброса удаляются, после него учитываются заново. История, поток существующего ответа и суточный
+        остаток доступны. Повтор с тем же ключом после снятия блокировки проверяется заново; клиент не повторяет
+        отказ автоматически в цикле. Полные правила и примеры — docs/api.md, раздел 7.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskRequest'
+            example:
+              text: Сколько я трачу на Самокат?
+              transfer_mode: with
+      responses:
+        '201':
+          description: Вопрос создан, генерация запущена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AskResponse'
+              example:
+                question:
+                  id: 01a10852-b340-77c5-9ba3-bb9964a666d0
+                  role: user
+                  text: Сколько я трачу на Самокат?
+                  created_at: '2026-10-04T22:10:00+03:00'
+                answer_id: 01a10852-b341-7a10-8f3e-6c2d9b4a1e07
+                remaining_limit: 4
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/assistant/messages/{answer_id}/events:
+    get:
+      tags:
+      - assistant
+      operationId: streamAnswer
+      summary: Поток ответа (SSE)
+      description: |
+        Клиент открывает поток сразу после `askAssistant` / `retryAnswer` и переоткрывает после обрыва или
+        возврата из фона. Для готового ответа приходят `snapshot` и терминальное событие сразу.
+
+        Порядок: `snapshot` (всегда первым) → `chunk` / `block` / `source` / `chip` в любом порядке →
+        терминальное `done` или `error`. При `error` попытка возвращается, ответ получает статус `failed`,
+        уже показанные блоки клиент убирает; клиент показывает `user_message` события по общим правилам ошибок
+        (совместимость со старым сервером — `text`) и «Повторить» только при
+        `retryable: true`. Генерация дольше 3 минут (в том числе прерванная сбоем сервера) завершается `MODEL_ERROR`.
+        Сбой сервера посреди потока — не `error`: поток закрывается без терминального события, клиент переоткрывает
+        его по правилу «SSE — переподключение» (`info.description`) и получает снимок.
+        Заменённый повтором ответ — 404.
+      parameters:
+      - $ref: '#/components/parameters/AnswerId'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Поток событий
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: 'SSE-поток. События: `snapshot`, `chunk`, `block`, `source`, `chip`, `done`, `error` — схемы
+                  в `x-sse-events`.'
+              example: |
+                event: snapshot
+                data: {"status": "generating", "blocks": [{"type": "text", "v": 1, "data": {"text": "За апрель — сентябрь на Самокат ушло **7 200 ₽**"}}], "chips": [], "source": null, "currency": "RUB"}
+
+                event: chunk
+                data: {"index": 0, "text": ", все операции — с июля."}
+
+                event: done
+                data: {"charged": true, "remaining_limit": 4}
+          x-sse-events:
+            snapshot:
+              $ref: '#/components/schemas/AnswerSnapshotEvent'
+            chunk:
+              $ref: '#/components/schemas/AnswerChunkEvent'
+            block:
+              $ref: '#/components/schemas/AnswerBlockEvent'
+            source:
+              $ref: '#/components/schemas/AnswerSource'
+            chip:
+              $ref: '#/components/schemas/Chip'
+            done:
+              $ref: '#/components/schemas/AnswerDoneEvent'
+            error:
+              $ref: '#/components/schemas/AnswerErrorEvent'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/assistant/messages/{answer_id}/retry:
+    post:
+      tags:
+      - assistant
+      operationId: retryAnswer
+      summary: Повторить ответ
+      description: |
+        «Повторить» у неудачного ответа с `retryable: true` (сейчас — только `MODEL_ERROR`): тот же вопрос, новый ответ; неудачный ответ заменяется — вопрос в истории
+        не дублируется. Попытка списывается заново (неудачная уже возвращена). Дальше — `streamAnswer` по новому
+        `answer_id`. `RETRY_NOT_ALLOWED` (422) — ответ не в статусе `failed` с `retryable: true` или уже заменён. У ответов,
+        сохранённых до FIN-159 (признак не записан), повтор решается по коду: `MODEL_ERROR` — разрешён.
+
+        Отдельный лимит OFF_TOPIC — как у `askAssistant`: начальные значения 5 терминальных исходов за скользящие
+        7×24 часа после последнего сброса; случай истекает ровно через 7 суток с завершения. Блокировка действует
+        и на ответ с `retryable: true`: 429 `RATE_LIMITED` с `error.retry_at` (когда число уже сохранённых случаев станет меньше 5) и
+        `Retry-After`, без нового ответа, вызова модели и списания. Сброс — только успешный финансовый `complete`
+        с `charged: true`; ранее принятая генерация может завершиться и снять блокировку раньше `retry_at`.
+        Сохранённый успешный результат ключа воспроизводится до проверки лимита, без повторного списания.
+        Отказ не сохраняется под ключом; после снятия блокировки запрос можно повторить с тем же ключом.
+        История, поток существующего ответа и суточный остаток доступны. Полные правила — docs/api.md, раздел 7.
+      parameters:
+      - $ref: '#/components/parameters/AnswerId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '201':
+          description: Новый ответ запущен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryResponse'
+              example:
+                answer_id: 01a10853-0c11-7d2e-9a4b-6f1e3c8d2a95
+                remaining_limit: 4
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/assistant/limit:
+    get:
+      tags:
+      - assistant
+      operationId: getAssistantLimit
+      summary: Остаток лимита
+      description: |
+        Только суточный остаток вопросов. Отдельная блокировка OFF_TOPIC (docs/api.md, раздел 7) его не меняет
+        и не закрывает этот метод: положительный остаток не гарантирует приём нового вопроса или повтора.
+      parameters:
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Лимит
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantLimit'
+              example:
+                remaining: 4
+                daily_max: 5
+                resets_at: '2026-10-05T00:00:00+03:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token (JWT, 15 мин). При 401 клиент вызывает `refreshTokens`, при неудаче — экран входа.
+    verificationToken:
+      type: apiKey
+      in: header
+      name: X-Verification-Token
+      description: Секрет заявки на верификацию из `startPhoneVerification`. Только в заголовке — не в URL.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        UUID на одно логическое действие пользователя; клиент хранит его до окончательного ответа и повторяет
+        при повторе запроса. Повтор с тем же ключом и телом возвращает сохранённый ответ (сохраняются только
+        2xx, 400 кроме `CLIENT_VERSION_UNSUPPORTED`, 413, 422) — 24 часа, для `refreshTokens` — 60 секунд. Исключение —
+        429 `RATE_LIMITED` на дубль в `startPhoneVerification` (номер занят у провайдера): сохраняется до своего
+        `retry_at` и воспроизводится с пересчитанным от текущего момента `Retry-After`. Тот же ключ с другим телом —
+        409 `IDEMPOTENCY_CONFLICT`; первый запрос ещё выполняется — 409 `REQUEST_IN_PROGRESS`.
+        Исправленный ввод — новый ключ. Без заголовка — 400 `VALIDATION_ERROR`.
+      schema:
+        type: string
+        format: uuid
+    XClientVersion:
+      name: X-Client-Version
+      in: header
+      required: true
+      description: |
+        Версия клиента `<платформа>/<версия>+<сборка>` (`android/0.2.5+41`): платформа — открытый код
+        (`android`, `ios`, `web`), версия — `MAJOR.MINOR.PATCH`, сборка — целое число. Обязателен на всех
+        запросах. Версия ниже минимальной для платформы, нет заголовка, значение не разобрано или платформа
+        неизвестна — 400 `CLIENT_VERSION_UNSUPPORTED`, а не `VALIDATION_ERROR`: сервер проверяет заголовок до
+        валидации запроса по схеме. Сравниваются только `MAJOR.MINOR.PATCH`, по порядку и как числа (не
+        как строки): при минимальной `0.2.0` версия `0.10.0` проходит. Сборка не участвует, равная минимальной
+        версия проходит. Значение можно подделать: только совместимость, логи и метрики, не авторизация и не
+        лимиты. Браузерный preflight (`OPTIONS`) обрабатывается до всех проверок и не требует ни этого
+        заголовка, ни `Authorization`.
+      schema:
+        type: string
+        maxLength: 64
+        pattern: ^[a-z][a-z0-9_]*/(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\+[0-9]+$
+      example: android/0.2.5+41
+    XRequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: Сквозная трассировка; клиент генерирует новый на каждую попытку, сервер возвращает эхом.
+      schema:
+        type: string
+        format: uuid
+    UploadId:
+      name: upload_id
+      in: path
+      required: true
+      description: ID загрузки.
+      schema:
+        type: string
+    OperationId:
+      name: id
+      in: path
+      required: true
+      description: ID операции или пары переводов.
+      schema:
+        type: string
+    AnswerId:
+      name: answer_id
+      in: path
+      required: true
+      description: ID ответа помощника.
+      schema:
+        type: string
+  headers:
+    XRequestId:
+      description: Эхо `X-Request-Id` запроса.
+      schema:
+        type: string
+    RetryAfter:
+      description: Через сколько секунд повторить.
+      schema:
+        type: integer
+        minimum: 0
+  responses:
+    BadRequest:
+      description: 'Невалидный запрос: `VALIDATION_ERROR` (все нарушения в `details`) или `CLIENT_VERSION_UNSUPPORTED` (версия клиента ниже минимальной для платформы, заголовка `X-Client-Version` нет, его значение не разобрано или платформа неизвестна).'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Request validation failed
+              details:
+              - field: amount_from
+                code: OUT_OF_RANGE
+                message: must be >= 0
+    Unauthorized:
+      description: 'Нет, невалидный или просроченный токен: `INVALID_TOKEN`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: INVALID_TOKEN
+              message: Token is invalid or expired
+    Forbidden:
+      description: 'Нет согласия или лимит исчерпан: `CONSENT_REQUIRED`, `LIMIT_EXCEEDED` (с `error.resets_at`).'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: LIMIT_EXCEEDED
+              message: Daily question limit exceeded
+              resets_at: '2026-10-05T00:00:00+03:00'
+    NotFound:
+      description: '`NOT_FOUND` — ресурса нет или он чужой.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: NOT_FOUND
+              message: Not found
+    Conflict:
+      description: 'Конфликт по `Idempotency-Key`: `IDEMPOTENCY_CONFLICT` (другое тело), `REQUEST_IN_PROGRESS` (с `Retry-After`).'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: REQUEST_IN_PROGRESS
+              message: Request with this Idempotency-Key is in progress
+    PayloadTooLarge:
+      description: '`FILE_TOO_LARGE` — файл больше `max_file_size_bytes`.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: FILE_TOO_LARGE
+              message: File exceeds 10 MB
+    Unprocessable:
+      description: |
+        Запрос понят, но выполнить нельзя: `WRONG_FORMAT`, `CSV_NOT_ACCEPTED`, `WRONG_BANK`, `CONSENT_OUTDATED`,
+        `TOO_MANY_RESULTS`, `SELECTION_NOT_FOUND`, `CATEGORY_NOT_ASSIGNABLE`, `RETRY_NOT_ALLOWED`.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: WRONG_BANK
+              message: OFX is not from T-Bank
+    TooManyRequests:
+      description: '`RATE_LIMITED` — превышен лимит запросов; `error.retry_at` и `Retry-After`.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: RATE_LIMITED
+              message: Too many attempts
+              retry_at: '2026-10-04T22:27:00+03:00'
+    InternalError:
+      description: '`INTERNAL_ERROR` — внутренняя ошибка.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: INTERNAL_ERROR
+              message: Internal error
+    ServiceUnavailable:
+      description: '`MAINTENANCE` — техработы; `error.until` (может отсутствовать) и `Retry-After`.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: MAINTENANCE
+              message: Maintenance in progress
+              until: '2026-10-16T03:00:00+03:00'
+  schemas:
+    Range:
+      type: object
+      description: Полуинтервал `[from, to)`.
+      required:
+      - from
+      - to
+      properties:
+        from:
+          type: string
+          format: date-time
+          description: Начало, включительно.
+        to:
+          type: string
+          format: date-time
+          description: Конец, исключительно.
+    Month:
+      type: string
+      description: Календарный месяц `YYYY-MM` в поясе профиля.
+      pattern: ^\d{4}-(0[1-9]|1[0-2])$
+      example: '2026-09'
+    PeriodKey:
+      type: string
+      description: |
+        Ключ календарного периода: `YYYY-MM` (месяц), `YYYY-Qn` (квартал), `YYYY` (год). Формат расширяется вместе
+        с `PeriodType` (неделя — `YYYY-Www`); сервер возвращает ключи только в формате запрошенного `period`.
+      pattern: ^\d{4}(-(0[1-9]|1[0-2])|-Q[1-4])?$
+      example: '2026-Q3'
+    PeriodType:
+      type: string
+      description: 'Тип периода: `month`, `quarter`, `year`. Открытый набор: клиент запрашивает только известные значения.'
+      x-extensible-enum:
+      - month
+      - quarter
+      - year
+    TransferMode:
+      type: string
+      description: |
+        Режим учёта переводов: `with` — с переводами, `without` — без переводов людям (входящих и исходящих).
+        «Между своими счетами» исключается в обоих режимах. В запросах неизвестное значение сервер отклоняет 400;
+        в ответах неизвестное значение клиент обрабатывает как `with`. Отсутствие поля в фильтре Поиска значит
+        «без правил аналитики», а не `with`.
+      x-extensible-enum:
+      - with
+      - without
+    OperationKindCode:
+      type: string
+      description: |
+        Направление (`kind`) в `operations_filter` и в запросе Поиска (FIN-82). Открытый набор: неизвестное значение
+        клиент не отбрасывает, а показывает чипом «Как на „Аналитике“» и передаёт в запрос как есть; сервер
+        принимает любой `kind`, который сам присылает.
+      x-extensible-enum:
+      - expense
+      - income
+    Coverage:
+      type: string
+      description: |
+        Полнота данных за период: `complete` — весь период; `partial` — частично (подпись по `data_from`/`data_to`
+        и `gaps`); `no_data` — данных нет. Неизвестное значение — как `partial`.
+      x-extensible-enum:
+      - complete
+      - partial
+      - no_data
+    Money:
+      type: integer
+      format: int64
+      description: Сумма в копейках.
+    OperationsFilter:
+      type: object
+      description: |
+        Параметры Поиска (`listOperations`) — из аналитики, чипов помощника и итога импорта. Клиент открывает Поиск
+        с этими фильтрами, показывает их чипами, даёт править и сбросить. Фильтры без своего чипа
+        (`transfer_mode`, `selection`) показываются одним чипом с `selection_name` или «Как на „Аналитике“».
+        Отсутствующее поле — фильтра нет (в том числе `transfer_mode`: без него Поиск работает без правил аналитики).
+      properties:
+        from:
+          type: string
+          format: date-time
+          nullable: true
+        to:
+          type: string
+          format: date-time
+          nullable: true
+        q:
+          type: string
+          nullable: true
+        category_id:
+          type: string
+          nullable: true
+        kind:
+          $ref: '#/components/schemas/OperationKindCode'
+        amount_from:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+        amount_to:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+        transfer_mode:
+          type: string
+          description: |
+            Режим учёта переводов: `with` — с переводами, `without` — без переводов людям (входящих и исходящих).
+            «Между своими счетами» исключается в обоих режимах. В запросах неизвестное значение сервер отклоняет 400;
+            в ответах неизвестное значение клиент обрабатывает как `with`. Отсутствие поля в фильтре Поиска значит
+            «без правил аналитики», а не `with`.
+          x-extensible-enum:
+          - with
+          - without
+          nullable: true
+        selection:
+          type: string
+          nullable: true
+          description: Непрозрачная выборка; клиент передаёт как есть.
+        selection_name:
+          type: string
+          nullable: true
+          description: Подпись выборки для чипа («Комиссии и проценты банку», «Самокат»). В запрос не передаётся.
+    AnalyticsParams:
+      type: object
+      description: Параметры экрана «Аналитика».
+      required:
+      - period
+      - date
+      - transfer_mode
+      properties:
+        period:
+          $ref: '#/components/schemas/PeriodType'
+        date:
+          $ref: '#/components/schemas/PeriodKey'
+        transfer_mode:
+          $ref: '#/components/schemas/TransferMode'
+    ErrorResponse:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+    UserMessage:
+      type: string
+      minLength: 1
+      maxLength: 1000
+      pattern: '[^\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]'
+      description: |
+        Безопасный обычный текст из единого каталога BFF (FIN-224), 1–1000 кодовых точек Unicode,
+        хотя бы одна вне Unicode White_Space (точный набор — pattern и docs/api.md «Единое отображение ошибок»).
+        Свойства user_message/error_user_message необязательны и не принимают null (optional<string> в docs/api.md):
+        сервер опускает отсутствующее значение, не заменяет его null; error_user_message отсутствует у истории не failed.
+        Не интерпретируется как HTML, Markdown, ссылка или команда. Сырой ввод, SQL, исключения и ответы
+        провайдера/модели сюда не копируются; параметры шаблона типизированы и проверены BFF.
+        Клиент показывает корректное значение и для неизвестного кода. Поле отсутствует — только у помощника
+        возможен fallback на прежний безопасный text/error_text; иначе — локальный безопасный текст по прежним
+        правилам известного кода и контекста. Общий текст по HTTP-статусу — только для неизвестного REST-кода.
+        Поле присутствует, но null, другого типа, пустое, пробельное или длиннее лимита — локальный безопасный
+        текст без подстановки legacy text/error_text. Ошибка этого необязательного поля не отменяет code,
+        все прежние действия из раздела 8 docs/api.md и правил эндпоинта или метаданные повтора.
+        Диагностический message никогда не используется для UI.
+    ErrorSeverity:
+      type: string
+      description: |
+        Только оформление: info — информация, warning — предупреждение, error — ошибка. Открытый код;
+        свойства severity/error_severity необязательны и не принимают null (optional<code> в docs/api.md):
+        сервер опускает отсутствующее значение, не заменяет его null; error_severity отсутствует у истории не failed.
+        неизвестное, отсутствующее, null или значение другого типа — оформление error с сохранением
+        корректного пользовательского текста. Не меняет исход операции, не разрешает повтор, не отменяет
+        retry_at/Retry-After/retryable и не создаёт специальных действий по неизвестному коду.
+      x-extensible-enum:
+      - info
+      - warning
+      - error
+    Error:
+      type: object
+      description: |
+        Ровно одна ошибка на ответ. Специальные действия — только по известному `code`; неизвестный код
+        отображается по корректному `user_message`, без него — безопасная общая ошибка по HTTP-статусу.
+        Дополнительные поля конкретного кода (`retry_at`, `resets_at`, `until`) описаны здесь; новые
+        поля могут появиться. Действия раздела8 применяются к этой REST-форме и явно описанным контекстам ErrorEvent,
+        не к совпавшему коду AnswerErrorEvent/StreamError/истории.
+        Корректный retryable=false имеет приоритет над прежним прямым/автоматическим повтором в неизменённом
+        контексте по 429/409; отдельные известные auth/maintenance recovery flows — по info.description;
+        true подчиняется ожиданию и условиям метода/ключа, отсутствие/некорректность — прежним безопасным правилам.
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+          description: Машиночитаемый код (реестр — `api.md`, раздел 8). Коды, которые бывают только в событиях потоков (`PROCESSING_FAILED`,
+            `CANCELLED`, `MODEL_ERROR`, `CANNOT_ANSWER`, `OFF_TOPIC`), описаны в схемах событий.
+          x-extensible-enum:
+          - VALIDATION_ERROR
+          - CLIENT_VERSION_UNSUPPORTED
+          - INVALID_TOKEN
+          - TOKEN_EXPIRED
+          - TOKEN_REVOKED
+          - CONSENT_REQUIRED
+          - LIMIT_EXCEEDED
+          - NOT_FOUND
+          - IDEMPOTENCY_CONFLICT
+          - REQUEST_IN_PROGRESS
+          - FILE_TOO_LARGE
+          - WRONG_FORMAT
+          - CSV_NOT_ACCEPTED
+          - WRONG_BANK
+          - CONSENT_OUTDATED
+          - TOO_MANY_RESULTS
+          - SELECTION_NOT_FOUND
+          - CATEGORY_NOT_ASSIGNABLE
+          - RETRY_NOT_ALLOWED
+          - RATE_LIMITED
+          - INTERNAL_ERROR
+          - MAINTENANCE
+        message:
+          type: string
+          description: Для логов и отладки, не для UI.
+        user_message:
+          $ref: '#/components/schemas/UserMessage'
+        severity:
+          $ref: '#/components/schemas/ErrorSeverity'
+        retryable:
+          type: boolean
+          description: |
+            Только REST Error: необязательный non-null флаг двух гарантий одновременно — повторная отправка
+            этого конкретного запроса безопасна по правилам идемпотентности метода И разрешена после ошибки.
+            true не описывает метод глобально, не требует автоповтора, не обещает успех и не разрешает цикл.
+            Корректный false запрещает прямой повтор/автоматическое переоткрытие SSE после этого REST-отказа,
+            имеет приоритет над прежними прямыми таймерами429/409; только отсутствие/некорректность сохраняет legacy-повтор.
+            После успешного документированного auth-flow исходная операция возобновляется с новым Authorization
+            и ПРЕЖНИМ ключом при доказанных safety/TTL. У известного MAINTENANCE сохраняется отдельный сценарий
+            экрана техработ: один контролируемый resume после Retry-After с тем же ключом/проверками; новый отказ
+            не запускает цикл. Это не разрешение общего таймера или неизвестного кода; ввод пользователя сохраняется.
+            Сохраняются метод/адрес/тело и тот же Idempotency-Key, если нужен; новый X-Request-Id у каждой попытки.
+            В момент фактической отправки клиент снова проверяет ограничения и окно исходного ключа.
+            Флаг не продлевает TTL (обычно 24ч, refresh 60с); retry_at OFF_TOPIC до7суток может выйти за него.
+            Истёкший ключ нельзя автоматически заменять новым ради повтора. Корректирующие сценарии известных кодов
+            сохраняются при false; исправленный ввод/файл или новое намерение — новое действие/ключ.
+            Retry-After/retry_at остаются; resets_at — информация о квоте, severity/текст/HTTP-статус не дают разрешения.
+            Permission исходного RPC задаёт сервис/usecase в optional RequestRetryInfo; BFF соединяет применимое
+            разрешение с доказанной безопасностью ВСЕГО REST-запроса, включая другие RPC. Отсутствующая/невалидная
+            деталь или недоказанный контекст дают false, без business-switch по причинам в BFF; собственный отказ
+            BFF получает permission из транспортного обработчика, не UI-каталога. Один UUID ключа не доказывает его возраст/действительность;
+            429/5xx и голые gRPC UNAVAILABLE/DEADLINE_EXCEEDED не доказывают безопасность POST после возможного эффекта.
+            Поля нет (совместимость), null или неверный тип — без нового разрешения, с сохранением прежних безопасных
+            правил метода/кода/сценария; ошибка поля не уничтожает другие метаданные. При сетевом отказе тела может
+            не быть: действуют правила вызываемого метода. Это не assistant SSE/Message.retryable: там разрешён
+            RetryAnswer — новая генерация с новым ключом, а не повтор исходного AskQuestion (docs/api.md FIN-224).
+        details:
+          type: array
+          nullable: true
+          description: Все найденные нарушения; сейчас только у `VALIDATION_ERROR`.
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+        retry_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: У `RATE_LIMITED` — когда можно повторить.
+        resets_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: У `LIMIT_EXCEEDED` — когда обновится лимит вопросов (полночь по Москве).
+        until:
+          type: string
+          format: date-time
+          nullable: true
+          description: У `MAINTENANCE` — ожидаемое окончание техработ; нет — неизвестно. Для ожидания приоритетен свежий Retry-After в секундах, UI-datetime fallback — только через свежий Date того же ответа. false запрещает прямой retry; отдельный известный восстановительный сценарий экрана техработ — по info.description.
+    ErrorDetail:
+      type: object
+      required:
+      - code
+      - message
+      properties:
+        field:
+          type: string
+          nullable: true
+          description: Имя query-параметра или JSON-путь в теле (`filters.category_id`); нет — нарушение касается запроса
+            целиком.
+        code:
+          type: string
+          description: 'Код нарушения: `REQUIRED`, `INVALID_FORMAT`, `OUT_OF_RANGE`. Неизвестный — общая ошибка поля.'
+          x-extensible-enum:
+          - REQUIRED
+          - INVALID_FORMAT
+          - OUT_OF_RANGE
+        message:
+          type: string
+    SseError:
+      $ref: '#/components/schemas/ErrorEvent'
+    ErrorEvent:
+      type: object
+      description: Универсальная внешняя форма события `error` после начала потока; прежнее имя SseError остаётся алиасом той же схемы. Новых wire-полей или generic retryable здесь нет. Неизвестный код — по корректному user_message,
+        без него — безопасная общая ошибка сценария; в обоих случаях сохраняется прежнее предложение повторить
+        вручную. severity на это не влияет. Ограничения сценария и ожидание RATE_LIMITED сохраняются;
+        правило общего SSE не заменяет retryable события помощника.
+        Сбой сервера или транспорта посреди потока сюда не приходит — поток закрывается без терминального события
+        (`info.description`, «SSE — переподключение», FIN-159); `INTERNAL_ERROR` оставлен в списке для совместимости.
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+          x-extensible-enum:
+          - INTERNAL_ERROR
+        message:
+          type: string
+          description: Для логов и отладки, не для UI.
+        user_message:
+          $ref: '#/components/schemas/UserMessage'
+        severity:
+          $ref: '#/components/schemas/ErrorSeverity'
+    StreamError:
+      type: object
+      description: |
+        Терминальное событие `error` потока прогресса импорта: `PROCESSING_FAILED` — не удалось разобрать файл
+        (в том числе разбор не завершился за 3 минуты — таймаут, FIN-159);
+        `CANCELLED` — разбор прерван пользователем; без корректного user_message сохраняются прежнее безопасное
+        сообщение и поведение отмены, а не ошибка разбора. Неизвестный код — по корректному user_message;
+        без него — как `PROCESSING_FAILED`: «Не удалось разобрать файл». Источник причины — валидный внутренний
+        вложенный Status (его открытый reason не ограничен старым enum); отсутствующий Status использует legacy adapter,
+        невалидный присутствующий — code=PROCESSING_FAILED, legacy-код (включая CANCELLED) не читается.
+        При absent Status legacy CANCELLED сохраняется. Совпадение с REST-кодом не запускает действия раздела8;
+        действуют правила импорта, не auth/maintenance/quota или возобновление исходного Ask. При переподключении к неудачной
+        загрузке BFF формирует эти поля по сохранённому коду и параметрам; в истории загрузок ошибки нет.
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+          x-extensible-enum:
+          - PROCESSING_FAILED
+          - CANCELLED
+        message:
+          type: string
+          description: Для логов и отладки, не для UI.
+        user_message:
+          $ref: '#/components/schemas/UserMessage'
+        severity:
+          $ref: '#/components/schemas/ErrorSeverity'
+    StartPhoneVerificationRequest:
+      type: object
+      required:
+      - phone
+      properties:
+        phone:
+          type: string
+          description: Номер в формате E.164, только российские (`+7` и 10 цифр). Неверный формат — 400 `VALIDATION_ERROR`
+            с нарушением у поля `phone` (`INVALID_FORMAT`), FIN-68.
+          pattern: ^\+7\d{10}$
+          example: '+79001234567'
+    PhoneVerification:
+      type: object
+      required:
+      - verification_token
+      - callback_number
+      - expires_at
+      properties:
+        verification_token:
+          type: string
+          description: Секрет заявки (256 случайных бит, base64url). Хранится в памяти до окончания входа, передаётся только
+            в `X-Verification-Token`.
+        callback_number:
+          type: string
+          description: Номер подтверждения, на который пользователь звонит со своего телефона (E.164); клиент показывает его
+            и передаёт в `ACTION_DIAL`. Звонок оплачивается по тарифу абонента — не бесплатный. Номер может быть общим для
+            многих пользователей; звонок засчитывается только с номера из заявки и только пока она действует. Не
+            зашивается в приложение.
+        expires_at:
+          type: string
+          format: date-time
+          description: Срок жизни заявки по часам сервера; задаёт сервер (сейчас 5 минут с создания — срок заявки у
+            провайдера). Для отсчёта на устройстве клиент его не использует (см. `expires_in`) и длительность не
+            зашивает. После него — новая заявка с новым `Idempotency-Key`.
+        expires_in:
+          type: integer
+          minimum: 0
+          description: Оставшийся срок заявки в секундах на момент отправки ответа (`expires_at` минус время сервера,
+            округлено вниз, не меньше 0). Пересчитывается при каждой отправке, в том числе при повторе сохранённого ответа
+            по `Idempotency-Key`. Клиент уменьшает длительность по монотонному elapsed time с учётом сна,
+            а местную подпись «до ЧЧ:ММ» строит от часов получения плюс длительность. Нет поля (старый сервер) —
+            приблизительный UI-fallback через Date того же свежего ответа; без базы — обновить состояние,
+            старую длительность не перезапускать (info.description, «Время ожидания и часы»).
+          example: 300
+    PhoneVerificationStatusEvent:
+      type: object
+      description: Событие `status` потока верификации.
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          description: |
+            `pending` — звонка ещё не было; `verified` — номер подтверждён (терминальное); `expired` — срок заявки
+            истёк (терминальное). Неизвестный статус — заявка не удалась, предложить начать заново.
+          x-extensible-enum:
+          - pending
+          - verified
+          - expired
+        is_new_user:
+          type: boolean
+          nullable: true
+          description: 'Только при `verified`: `true` — номера нет в системе, показать экран согласия и вызвать `register`.'
+        access_token:
+          type: string
+          nullable: true
+          description: 'Только при `verified` и `is_new_user: false`.'
+        refresh_token:
+          type: string
+          nullable: true
+          description: 'Только при `verified` и `is_new_user: false`.'
+        registration_token:
+          type: string
+          nullable: true
+          description: 'Только при `verified` и `is_new_user: true`; одноразовый, живёт 15 минут с момента подтверждения
+            звонком (`verified`), а не до `expires_at` заявки. После срока 1.3 отвечает 401 `TOKEN_EXPIRED`.'
+    RegisterRequest:
+      type: object
+      required:
+      - registration_token
+      - pd_consent_accepted
+      - pd_consent_version
+      properties:
+        registration_token:
+          type: string
+          description: Из события `verified`.
+        pd_consent_accepted:
+          type: boolean
+          description: Согласие на обработку ПДн; `false` → 403 `CONSENT_REQUIRED`.
+        pd_consent_version:
+          type: string
+          description: Версия документа (`getConsentDocument`, `personal_data`), который видел пользователь. Устаревшая →
+            422 `CONSENT_OUTDATED`.
+        timezone:
+          type: string
+          description: Часовой пояс устройства (IANA); без поля — `Europe/Moscow`.
+          example: Europe/Moscow
+    RegisterResponse:
+      type: object
+      required:
+      - access_token
+      - refresh_token
+      - user_id
+      properties:
+        access_token:
+          type: string
+          description: JWT, 15 мин.
+        refresh_token:
+          type: string
+        user_id:
+          type: string
+    RefreshTokenRequest:
+      type: object
+      required:
+      - refresh_token
+      properties:
+        refresh_token:
+          type: string
+    TokenPair:
+      type: object
+      required:
+      - access_token
+      - refresh_token
+      properties:
+        access_token:
+          type: string
+          description: Новый JWT, 15 мин.
+        refresh_token:
+          type: string
+          description: Новый refresh token; старый с этого момента невалиден.
+    ConsentDocument:
+      type: object
+      required:
+      - type
+      - version
+      - title
+      - url
+      properties:
+        type:
+          type: string
+          x-extensible-enum:
+          - personal_data
+          - assistant
+        version:
+          type: string
+          description: Текущая версия — её клиент передаёт в `register` или `grantAssistantConsent`.
+        title:
+          type: string
+          description: Название документа для ссылки.
+        url:
+          type: string
+          format: uri
+          description: Полный текст документа.
+    Theme:
+      type: string
+      description: Тема оформления в ответе. Открытый набор (FIN-82) — неизвестное значение клиент обрабатывает как `system`.
+      x-extensible-enum:
+      - system
+      - light
+      - dark
+    ThemeUpdate:
+      type: string
+      description: Новая тема в `PATCH /v1/profile` — одно из значений, которые знает сервер.
+      enum:
+      - system
+      - light
+      - dark
+    Profile:
+      type: object
+      required:
+      - user_id
+      - phone
+      - theme
+      - timezone
+      - consents
+      - created_at
+      properties:
+        user_id:
+          type: string
+        phone:
+          type: string
+          description: Номер полностью, E.164 — логин пользователя; показывается целиком, форматирует клиент.
+        theme:
+          $ref: '#/components/schemas/Theme'
+        timezone:
+          type: string
+          description: Часовой пояс (IANA), в котором считаются месяцы и «сегодня».
+        consents:
+          type: array
+          description: |
+            Согласия пользователя, по одному на тип (FIN-82); новый тип — новый элемент. Нет элемента нужного типа —
+            согласия нет. Согласие на ПДн сюда не входит.
+          items:
+            $ref: '#/components/schemas/Consent'
+        created_at:
+          type: string
+          format: date-time
+          description: Дата регистрации.
+    Consent:
+      type: object
+      required:
+      - type
+      - granted
+      - current_version
+      properties:
+        type:
+          type: string
+          description: '`assistant` — передача данных помощнику (Alice AI). Элемент с неизвестным типом клиент пропускает.'
+          x-extensible-enum:
+          - assistant
+        granted:
+          type: boolean
+          description: Действует ли согласие.
+        version:
+          type: string
+          nullable: true
+          description: Версия документа, на которую дано согласие.
+        current_version:
+          type: string
+          description: Текущая версия документа; если `version` старше — согласие нужно дать заново.
+    ProfileUpdate:
+      type: object
+      description: Любое подмножество полей.
+      properties:
+        theme:
+          $ref: '#/components/schemas/ThemeUpdate'
+        timezone:
+          type: string
+          description: Новый часовой пояс (IANA). Клиент отправляет, когда новый пояс устройства держится не меньше
+            72 часов (FIN-91); правило и триггеры — `api.md`, 2.2. Сервер правило не проверяет.
+    AssistantConsentGrant:
+      type: object
+      required:
+      - version
+      properties:
+        version:
+          type: string
+          description: Версия документа (`getConsentDocument`, `assistant`), который видел пользователь. Устаревшая → 422
+            `CONSENT_OUTDATED`.
+    ImportConfig:
+      type: object
+      required:
+      - download_url
+      - login_url
+      - max_file_size_bytes
+      - accepted_formats
+      - suggested_period
+      properties:
+        download_url:
+          type: string
+          format: uri
+          description: Ссылка выгрузки OFX за `suggested_period` («Скачать за год»), открывается в браузере.
+        login_url:
+          type: string
+          format: uri
+          description: Вход в кабинет Т-Банка в браузере («Войти в Т-Банк»).
+        max_file_size_bytes:
+          type: integer
+          format: int64
+          description: Максимальный размер файла («Файл OFX до 10 МБ»).
+        accepted_formats:
+          type: array
+          description: Принимаемые форматы для показа. Проверку формата делает сервер.
+          items:
+            type: string
+        suggested_period:
+          allOf:
+          - $ref: '#/components/schemas/Range'
+          description: 12 месяцев назад для первой загрузки, от начала дня последней загруженной операции — для повторной;
+            `to` — начало завтрашнего дня.
+        loaded:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/LoadedSummary'
+          description: Что уже загружено. Нет — загрузок ещё не было (первая загрузка, «Загружу позже»).
+          type: object
+    LoadedSummary:
+      type: object
+      required:
+      - first_operation_at
+      - last_operation_at
+      - operation_count
+      properties:
+        first_operation_at:
+          type: string
+          format: date-time
+        last_operation_at:
+          type: string
+          format: date-time
+        operation_count:
+          type: integer
+          description: Операций всего.
+    UploadAccepted:
+      type: object
+      required:
+      - upload_id
+      - file_name
+      properties:
+        upload_id:
+          type: string
+          description: ID загрузки — для прогресса, отмены и удаления.
+        file_name:
+          type: string
+    ImportProgressEvent:
+      type: object
+      description: Событие `progress`.
+      required:
+      - stage
+      - percent
+      properties:
+        stage:
+          type: string
+          description: '`parsing`, `dedup`, `rules`. Для логов и отладки; клиент показывает только `percent`.'
+          x-extensible-enum:
+          - parsing
+          - dedup
+          - rules
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+    ImportResult:
+      type: object
+      description: Терминальное событие `complete` — всё для экрана итога импорта.
+      required:
+      - operation_count
+      - new_count
+      - duplicate_count
+      - unread_count
+      - is_first_import
+      - accounts
+      - categorized_count
+      - own_transfer_count
+      - uncategorized_count
+      - coverage
+      - notices
+      - currency
+      properties:
+        operation_count:
+          type: integer
+          description: Операций прочитано из файла.
+        new_count:
+          type: integer
+          description: Из них новых.
+        duplicate_count:
+          type: integer
+          description: Уже были загружены — пропущены. При `new_count = 0` — «Новых операций нет».
+        unread_count:
+          type: integer
+          description: Строк файла, которые не удалось прочитать; подробности — `listUnreadLines`.
+        first_operation_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Первая операция в файле; нет, если файл пустой.
+        last_operation_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_first_import:
+          type: boolean
+          description: Первая загрузка пользователя.
+        totals:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ImportTotals'
+          description: Суммы над плитками итога, по правилам аналитики («С переводами»); нет, если новых операций нет.
+          type: object
+        accounts:
+          type: array
+          description: Счета в файле.
+          items:
+            $ref: '#/components/schemas/ImportAccount'
+        categorized_count:
+          type: integer
+          description: Новые операции, не вошедшие в `uncategorized_count`, — `new_count` − `uncategorized_count`.
+        own_transfer_count:
+          type: integer
+          description: Из `categorized_count` — операций (две на пару) в категории «Между своими счетами».
+        uncategorized_count:
+          type: integer
+          description: Без категории; входят в суммы. Новые операции в категории `cat_uncategorized` (категория банка пустая
+            или буквально «Без категории») плюс возвраты, для которых не нашлась расходная категория, оба направления (FIN-126).
+            В аналитике тот же набор разделён по направлениям — строки «Без категории» в «Расходах по категориям»
+            (списания и возвраты) и в «Доходах по категориям» (зачисления).
+        uncategorized_filters:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/OperationsFilter'
+          description: Выборка для ссылки «разобрать» — `selection` «Без категории» за дни новых операций загрузки
+            (`from`/`to`); может включать операции «Без категории» прошлых загрузок за те же дни.
+          type: object
+        coverage:
+          $ref: '#/components/schemas/ImportCoverage'
+        currency:
+          type: string
+          description: Валюта всех сумм события (ISO 4217); сейчас всегда `RUB`.
+          example: RUB
+        notices:
+          type: array
+          description: Особые ситуации (FIN-82 — объекты с текстом).
+          items:
+            $ref: '#/components/schemas/ImportNotice'
+    ImportNotice:
+      type: object
+      required:
+      - code
+      - text
+      properties:
+        code:
+          type: string
+          description: '`empty_statement` — в файле нет операций; `no_expenses` — нет расходов.'
+          x-extensible-enum:
+          - empty_statement
+          - no_expenses
+        text:
+          type: string
+          description: Готовый текст. Известный `code` клиент оформляет сам, неизвестный — показывает `text`.
+    ImportTotals:
+      type: object
+      required:
+      - scope
+      - expense
+      - income
+      properties:
+        scope:
+          type: string
+          description: '`all` — по всем операциям файла (первая загрузка); `new` — только по новым. Неизвестное — подпись
+            без уточнения.'
+          x-extensible-enum:
+          - all
+          - new
+        expense:
+          $ref: '#/components/schemas/Money'
+        income:
+          $ref: '#/components/schemas/Money'
+    ImportAccount:
+      type: object
+      required:
+      - type_name
+      - is_other_bank
+      properties:
+        type_name:
+          type: string
+          description: Тип счёта для показа.
+        mask:
+          type: string
+          nullable: true
+          description: Последние цифры («··4821»); нет у счёта другого банка.
+        is_other_bank:
+          type: boolean
+          description: Счёт другого банка, подключённый в Т-Банке.
+    ImportCoverage:
+      type: object
+      description: Полнота данных — для плашек «Часть аналитики пока закрыта» и «Теперь есть 1 полный месяц».
+      required:
+      - full_months
+      - full_months_before
+      - newly_full_months
+      - incomplete_months
+      - features
+      properties:
+        full_months:
+          type: integer
+          description: Полных месяцев по всем загрузкам после этой.
+        full_months_before:
+          type: integer
+          description: Полных месяцев до этой загрузки.
+        newly_full_months:
+          type: array
+          description: Месяцы, ставшие полными с этой загрузкой.
+          items:
+            $ref: '#/components/schemas/Month'
+        incomplete_months:
+          type: array
+          items:
+            $ref: '#/components/schemas/IncompleteMonth'
+        features:
+          type: array
+          description: Что открыто и что откроется. Пороги — на сервере, клиент только формулирует текст.
+          items:
+            $ref: '#/components/schemas/FeatureAvailability'
+    IncompleteMonth:
+      type: object
+      required:
+      - month
+      - range
+      - data_from
+      - data_to
+      - gaps
+      - in_progress
+      properties:
+        month:
+          $ref: '#/components/schemas/Month'
+        range:
+          $ref: '#/components/schemas/Range'
+        data_from:
+          type: string
+          format: date-time
+          description: 00:00 первого покрытого выпиской дня месяца (docs/api.md, «Формат»).
+        data_to:
+          type: string
+          format: date-time
+          description: Время последней операции, если она в последний покрытый день месяца, иначе 23:59:59 этого дня.
+        gaps:
+          type: array
+          description: Дни без данных ни в одном файле. Пропуск, пересекающий месяц, приходит целиком (docs/calc.md, раздел 4).
+          items:
+            $ref: '#/components/schemas/Range'
+        in_progress:
+          type: boolean
+          description: Месяц ещё не закончился.
+    FeatureAvailability:
+      type: object
+      required:
+      - feature
+      - open
+      - opened_now
+      - feature_name
+      properties:
+        feature:
+          type: string
+          description: |
+            Неизвестное значение клиент показывает по `feature_name` и `text`. Режимы «Квартал» и «Год» открыты
+            всегда — закрыты только их прогнозы и сравнения.
+          x-extensible-enum:
+          - comparison
+          - monthly_chart
+          - typical
+          - regular_payments
+          - notable_spending
+          - small_frequent
+          - year_forecast
+        open:
+          type: boolean
+        opened_now:
+          type: boolean
+          description: Открылось этой загрузкой.
+        required_full_months:
+          type: integer
+          nullable: true
+          description: Для закрытых — сколько полных месяцев нужно.
+        required_months_with_data:
+          type: integer
+          nullable: true
+          description: Для закрытых — сколько месяцев с данными нужно.
+        feature_name:
+          type: string
+          description: Название функции для показа («Прогноз на год»), есть всегда; запасной вариант для неизвестного `feature`.
+        text:
+          type: string
+          nullable: true
+          description: Готовая строка для закрытой функции («Прогноз на год — нужно 12 полных месяцев, есть 5»).
+    StatementsList:
+      type: object
+      required:
+      - uploads
+      properties:
+        summary:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StatementsSummary'
+          description: Сводка по всем загрузкам; нет, если загрузок нет.
+          type: object
+        uploads:
+          type: array
+          description: Загрузки, новые первыми. Неудачные не показываются.
+          items:
+            $ref: '#/components/schemas/Upload'
+    StatementsSummary:
+      type: object
+      required:
+      - upload_count
+      - operation_count
+      - first_operation_at
+      - last_operation_at
+      - gaps
+      properties:
+        upload_count:
+          type: integer
+        operation_count:
+          type: integer
+          description: Операций всего, без повторов.
+        first_operation_at:
+          type: string
+          format: date-time
+        last_operation_at:
+          type: string
+          format: date-time
+        gaps:
+          type: array
+          description: Дни без данных ни в одном файле.
+          items:
+            $ref: '#/components/schemas/Range'
+    Upload:
+      type: object
+      required:
+      - upload_id
+      - file_name
+      - status
+      - uploaded_at
+      - operation_count
+      - unread_count
+      - source_name
+      properties:
+        upload_id:
+          type: string
+        file_name:
+          type: string
+        status:
+          type: string
+          description: '`processing` — ещё разбирается (клиент открывает поток прогресса); `done`. Неизвестный — как `done`.'
+          x-extensible-enum:
+          - processing
+          - done
+        uploaded_at:
+          type: string
+          format: date-time
+        operation_count:
+          type: integer
+          description: Операций прочитано из файла (включая уже бывшие в других загрузках).
+        unread_count:
+          type: integer
+          description: |
+            Непрочитанных строк, которые ещё не закрыты. Строки, закрытые более поздней загрузкой (дочитанные или заменённые
+            её записью), сюда не входят (api.md 3.6, «Закрытие строк»; FIN-79).
+        resolved_unread_count:
+          type: integer
+          minimum: 0
+          description: |
+            Строк этой загрузки, дочитанных более поздними загрузками; нет или 0 — таких нет. Строки, заменённые
+            записью более поздней загрузки (снова не прочитались), не входят.
+        resolved_by_uploaded_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Когда загружена самая поздняя из загрузок, дочитавших строки («Строки дочитаны в загрузке от 12 октября»).
+            Есть, только если `resolved_unread_count` > 0.
+        period_from:
+          type: string
+          format: date
+          nullable: true
+          description: |
+            Первый день периода файла `YYYY-MM-DD` в поясе профиля, включительно (api.md 3.4; FIN-197): день
+            минимального `DTSTART` по счетам файла (блоки, где есть и `DTSTART`, и `DTEND`); если таких блоков нет —
+            день первой операции файла (docs/calc.md, раздел 4). Приходит вместе с `period_to`: оба есть или обоих нет.
+            Нет у загрузки в статусе `processing` и у файла без периода и без операций.
+          example: '2026-04-01'
+        period_to:
+          type: string
+          format: date
+          nullable: true
+          description: |
+            Последний день периода файла `YYYY-MM-DD` в поясе профиля, включительно (api.md 3.4; FIN-197): день
+            максимального `DTEND` по счетам файла (блоки, где есть оба тега); если таких блоков нет — день последней
+            операции файла. Приходит вместе с `period_from`.
+          example: '2026-09-30'
+        source_name:
+          type: string
+          description: Название источника для показа («Выписка Т-Банка»); клиент по нему не ветвится.
+    UnreadLinesList:
+      type: object
+      required:
+      - lines
+      properties:
+        lines:
+          type: array
+          description: Незакрытые непрочитанные строки по порядку в файле.
+          items:
+            $ref: '#/components/schemas/UnreadLine'
+    UnreadLine:
+      type: object
+      required:
+      - upload_id
+      - file_name
+      - line_number
+      - reason
+      - reason_name
+      properties:
+        upload_id:
+          type: string
+        file_name:
+          type: string
+        line_number:
+          type: integer
+          minimum: 1
+        date:
+          type: string
+          format: date-time
+          nullable: true
+          description: Дата операции, если её удалось прочитать.
+        reason:
+          type: string
+          description: |
+            Для статистики; показывается `reason_name`. Непрочитанной строку делает только то, без чего операцию
+            нельзя учесть: сумма, дата, целостность строки. Отсутствие описания строку не блокирует — операция
+            принимается с пустым `title` (FIN-67).
+          x-extensible-enum:
+          - bad_amount
+          - bad_date
+          - no_date
+          - truncated
+        reason_name:
+          type: string
+          description: Причина для показа.
+    Account:
+      type: object
+      required:
+      - type_name
+      properties:
+        type_name:
+          type: string
+          description: Тип счёта для показа («Текущий»).
+        mask:
+          type: string
+          nullable: true
+          description: Последние цифры («··4821»); нет у счёта другого банка.
+    AccountDetails:
+      allOf:
+      - $ref: '#/components/schemas/Account'
+      - type: object
+        required:
+        - spoken
+        properties:
+          spoken:
+            type: string
+            description: Подпись счёта для TalkBack («текущий счёт, последние цифры 4821»).
+    OperationBase:
+      type: object
+      required:
+      - id
+      - kind
+      - occurred_at
+      - amount
+      - currency
+      - title
+      - category_id
+      - category_name
+      - category_icon
+      - is_category_manual
+      - status
+      properties:
+        id:
+          type: string
+          description: ID операции или пары переводов.
+        kind:
+          type: string
+          description: |
+            `expense` — списание; `income` — зачисление; `own_transfer` — пара переводов между своими счетами.
+            Неизвестное значение — показывать сумму без знака и без цвета.
+          x-extensible-enum:
+          - expense
+          - income
+          - own_transfer
+        occurred_at:
+          type: string
+          format: date-time
+          description: Время совершения; у пары — время списания.
+        amount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Сумма, копейки, без знака — направление задаёт `kind`.
+        currency:
+          type: string
+          description: ISO 4217.
+          example: RUB
+        title:
+          type: string
+          description: Описание из выписки; у пары — «Перевод между счетами». Может быть пустой строкой, если
+            в выписке описания нет (FIN-67) — клиент показывает категорию банка или «Без описания».
+        category_id:
+          type: string
+          description: Итоговая категория (с учётом ручной смены).
+        category_name:
+          type: string
+        category_icon:
+          type: string
+          description: Ключ иконки, как в `Category.icon`.
+        is_category_manual:
+          type: boolean
+          description: Категорию сменил пользователь.
+        note:
+          type: string
+          nullable: true
+          description: Как запись учтена в аналитике («не в тратах», «возврат · Различные товары»). Нет — обычным образом.
+        status:
+          type: string
+          description: '`posted` — проведена, `pending` — холд. Неизвестный — как обычная операция, без пометки.'
+          x-extensible-enum:
+          - posted
+          - pending
+    OperationItem:
+      description: Запись в ленте и в результатах поиска.
+      allOf:
+      - $ref: '#/components/schemas/OperationBase'
+      - type: object
+        properties:
+          account:
+            nullable: true
+            allOf:
+            - $ref: '#/components/schemas/Account'
+            description: У `expense` и `income`.
+            type: object
+          from_account:
+            nullable: true
+            allOf:
+            - $ref: '#/components/schemas/Account'
+            description: У `own_transfer` — счёт списания.
+            type: object
+          to_account:
+            nullable: true
+            allOf:
+            - $ref: '#/components/schemas/Account'
+            description: У `own_transfer` — счёт зачисления.
+            type: object
+    OperationDetails:
+      description: Экран операции. Необязательные поля приходят, только если источник их поставляет.
+      allOf:
+      - $ref: '#/components/schemas/OperationBase'
+      - type: object
+        required:
+        - source_name
+        properties:
+          account:
+            nullable: true
+            allOf:
+            - $ref: '#/components/schemas/AccountDetails'
+            type: object
+          from_account:
+            nullable: true
+            allOf:
+            - $ref: '#/components/schemas/AccountDetails'
+            type: object
+          to_account:
+            nullable: true
+            allOf:
+            - $ref: '#/components/schemas/AccountDetails'
+            type: object
+          description:
+            type: string
+            nullable: true
+            description: Описание из выписки как есть; у пары — нет.
+          posted_at:
+            type: string
+            format: date-time
+            nullable: true
+            description: Время проведения банком; нет, если источник не сообщает.
+          note_details:
+            type: string
+            nullable: true
+            description: Развёрнутая версия `note` под категорией («Уменьшает расходы «Различные товары» в сентябре»).
+          bank_category:
+            type: string
+            nullable: true
+            maxLength: 64
+            description: Категория банка как в выписке, обрезанная до 64 символов; у пары — нет.
+          mcc:
+            type: string
+            nullable: true
+            description: MCC торговой точки, если источник сообщает (в OFX Т-Банка нет).
+          source_name:
+            type: string
+            description: Название источника («Выписка Т-Банка»).
+    OperationsList:
+      type: object
+      description: |
+        Лента: `items`, `summary`, `state`, `range`, `next_before`. Поиск: `items`, `total_count`, `range`,
+        `has_older_data`. Группировку по дням и месяцам клиент делает сам по `occurred_at` в поясе профиля.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperationItem'
+        summary:
+          type: array
+          description: Только в ленте — сводка по месяцам порции, новые первыми; по правилам «Аналитики» в режиме «С переводами».
+          items:
+            $ref: '#/components/schemas/MonthSummary'
+        state:
+          $ref: '#/components/schemas/FeedState'
+        range:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/Range'
+          description: Лента — границы порции. Поиск — фактический период; нет при `all_time` и при одной переданной границе.
+          type: object
+        next_before:
+          type: string
+          format: date-time
+          nullable: true
+          description: Только в ленте — `before` для следующей порции; нет — раньше операций нет.
+        total_count:
+          type: integer
+          description: Только в поиске — «Найдено 9 операций».
+        has_older_data:
+          type: boolean
+          nullable: true
+          description: Только в поиске с периодом по умолчанию — есть операции раньше `range.from` («Искать за всё время»).
+    MonthSummary:
+      type: object
+      required:
+      - month
+      - range
+      - expense
+      - income
+      properties:
+        month:
+          $ref: '#/components/schemas/Month'
+        range:
+          $ref: '#/components/schemas/Range'
+        expense:
+          type: integer
+          format: int64
+          description: Расходы за вычетом возвратов, со знаком.
+        income:
+          type: integer
+          format: int64
+          description: Доходы, со знаком.
+        data_to:
+          type: string
+          format: date-time
+          nullable: true
+          description: Есть, если месяц неполный — конец данных по покрытым дням (docs/api.md, «Формат») — время последней
+            операции, если она в последний покрытый день, иначе 23:59:59 этого дня. День берётся как есть («по 25
+            сентября»); не граница дня, в отличие от `FeedState.data_to`.
+    FeedState:
+      type: object
+      description: Только в ленте.
+      required:
+      - stale
+      properties:
+        stale:
+          type: boolean
+          description: Выписка устарела — последний покрытый периодом выписки день (`DTEND`, по всем загрузкам) больше
+            двух недель назад; от последней операции не зависит (FIN-124). Переключается в начале 15-го календарного дня
+            после последнего покрытого в поясе профиля — одновременно с `AnalyticsState.stale`. Загрузка без операций тоже
+            покрывает дни. Нет покрытых дней — `true`, `data_to` нет. Плашка — при `data_to` и `last_operation_at`; без
+            `last_operation_at` — пустое состояние без плашки.
+            Порог — на сервере.
+        data_to:
+          type: string
+          format: date-time
+          nullable: true
+          description: Конец данных по всем загрузкам — начало дня, следующего за последним покрытым днём (полуинтервал).
+            Последний покрытый день — день перед `data_to` («Данные в приложении по 25 сентября»). Покрытые дни дают и
+            загрузки без операций. Нет — нет ни одной загрузки в статусе `done` с покрытыми днями.
+        last_operation_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Время последней операции; для устаревания не используется.
+        last_uploaded_at:
+          type: string
+          format: date-time
+          nullable: true
+    ChangeCategoryRequest:
+      type: object
+      required:
+      - category_id
+      - occurred_at
+      properties:
+        category_id:
+          type: string
+          description: Категория с `assignable`, у которой `kinds` включает `kind` записи; для пары — любая с `assignable`.
+            Иначе 422 `CATEGORY_NOT_ASSIGNABLE` — клиент перечитывает справочник (`listCategories`) и перестраивает выбор.
+        occurred_at:
+          type: string
+          format: date-time
+          description: Время совершения записи — значение `occurred_at` из записи списка, поиска или деталей как есть;
+            у пары — время списания. Нет — 400 `VALIDATION_ERROR`. Неверное время — не ошибка — сервер ищет запись по
+            ID за всё время (FIN-202).
+    ChangeCategoryResponse:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          description: Изменённые записи целиком.
+          items:
+            $ref: '#/components/schemas/OperationDetails'
+        replaced_id:
+          type: string
+          nullable: true
+          description: Есть, если запись с этим ID перестала существовать — клиент заменяет её на `items`.
+    CategoriesList:
+      type: object
+      required:
+      - categories
+      properties:
+        categories:
+          type: array
+          description: Все категории в порядке отображения.
+          items:
+            $ref: '#/components/schemas/Category'
+    Category:
+      type: object
+      required:
+      - id
+      - name
+      - icon
+      - is_system
+      - kinds
+      - assignable
+      properties:
+        id:
+          type: string
+          description: Стабильный непрозрачный ключ (`cat_supermarkets`).
+        name:
+          type: string
+          maxLength: 64
+          description: Название; у категории банка — из выписки, обрезано до 64 символов.
+        icon:
+          type: string
+          description: Ключ иконки из набора приложения; неизвестный — иконка по умолчанию.
+        is_system:
+          type: boolean
+          description: Системная категория («Между своими счетами», «Возврат», «Без категории» — `cat_uncategorized`)
+            — группа «Системные» сверху в выборе.
+        kinds:
+          type: array
+          description: К каким записям применима. Неизвестные значения клиент пропускает.
+          items:
+            type: string
+            x-extensible-enum:
+            - expense
+            - income
+        assignable:
+          type: boolean
+          description: Можно выбрать при ручной смене категории.
+        note:
+          type: string
+          nullable: true
+          description: Подпись в выборе («не в тратах»); есть только у системных.
+    Analytics:
+      type: object
+      description: 'Ответ экрана «Аналитика». При `has_data: false` остальных полей нет.'
+      required:
+      - has_data
+      properties:
+        has_data:
+          type: boolean
+          description: Есть ли у пользователя хоть одна операция и хоть один покрытый выпиской день. `false` — пустое состояние
+            «Аналитики пока нет».
+        params:
+          allOf:
+          - $ref: '#/components/schemas/AnalyticsParams'
+          description: Фактические параметры ответа — `period`, точный `date`, `transfer_mode`.
+        currency:
+          type: string
+          description: 'Валюта всех сумм ответа (ISO 4217); есть всегда при `has_data: true`, сейчас — `RUB`.'
+        period:
+          $ref: '#/components/schemas/AnalyticsPeriodInfo'
+        navigation:
+          $ref: '#/components/schemas/AnalyticsNavigation'
+        blocks:
+          type: array
+          description: |
+            Блоки экрана по порядку (FIN-4). Состав и порядок решает сервер; клиент рисует их подряд, пропуская
+            неизвестные, несовместимые, выключенные флагом `analytics.block.<id>` и те, что не удалось разобрать.
+          items:
+            $ref: '#/components/schemas/Block'
+        state:
+          $ref: '#/components/schemas/AnalyticsState'
+    AnalyticsPeriodInfo:
+      type: object
+      required:
+      - range
+      - is_current
+      - coverage
+      - gaps
+      properties:
+        range:
+          $ref: '#/components/schemas/Range'
+        is_current:
+          type: boolean
+          description: Период ещё идёт.
+        coverage:
+          $ref: '#/components/schemas/Coverage'
+        data_from:
+          type: string
+          format: date-time
+          nullable: true
+          description: Начало данных внутри периода — 00:00 первого покрытого выпиской дня в периоде (docs/api.md,
+            «Формат»); нет — в периоде нет покрытых дней.
+        data_to:
+          type: string
+          format: date-time
+          nullable: true
+          description: Конец данных внутри периода — время последней операции, если она в последний покрытый день, иначе
+            23:59:59 этого дня. День берётся как есть («1–25 сентября»); не граница дня, в отличие от
+            `AnalyticsState.data_to`.
+        gaps:
+          type: array
+          description: Дни без данных ни в одной загрузке между первым и последним покрытым днём. Пропуск, пересекающий
+            период, приходит целиком, без обрезки границами периода (docs/calc.md, раздел 4).
+          items:
+            $ref: '#/components/schemas/Range'
+    AnalyticsNavigation:
+      type: object
+      properties:
+        previous:
+          type: string
+          description: '`date` предыдущего периода с данными (сосед в `listAnalyticsPeriods`); `null` — стрелка недоступна.'
+          pattern: ^\d{4}(-(0[1-9]|1[0-2])|-Q[1-4])?$
+          nullable: true
+        next:
+          type: string
+          description: '`date` следующего периода с данными (сосед в `listAnalyticsPeriods`); `null` — стрелка недоступна.'
+          pattern: ^\d{4}(-(0[1-9]|1[0-2])|-Q[1-4])?$
+          nullable: true
+    AnalyticsState:
+      type: object
+      required:
+      - stale
+      - data_from
+      - data_to
+      - full_months
+      - unread_lines_count
+      - calculated_at
+      - recalculating
+      properties:
+        stale:
+          type: boolean
+          description: Выписка устарела — последний покрытый периодом выписки день (`DTEND`, по всем загрузкам) больше
+            двух недель назад; от последней операции не зависит (FIN-124). Порог — на сервере.
+        last_operation_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Время последней загруженной операции; для устаревания не используется.
+        data_from:
+          type: string
+          format: date-time
+          description: Начало первого покрытого дня по всем загрузкам — для текста блокировки при нуле полных месяцев.
+        data_to:
+          type: string
+          format: date-time
+          description: Начало дня, следующего за последним покрытым днём по всем загрузкам (полуинтервал); плашка
+            устаревания — «Данные в приложении по <день перед data_to>».
+        full_months:
+          type: integer
+        unread_lines_count:
+          type: integer
+          description: Незакрытых непрочитанных строк за выбранный период (`listUnreadLines` с `from`/`to` периода; FIN-79).
+        calculated_at:
+          type: string
+          format: date-time
+        recalculating:
+          type: boolean
+          description: |
+            Идёт пересчёт, вызванный действием пользователя (импорт выписки, смена категории, удаление загрузки, смена
+            часового пояса, «Не подписка») — цифры могут измениться, клиент обновит экран позже. Пересчёт после релиза, меняющего реестр,
+            признак не ставит: снимки заменяются молча, по месяцам (FIN-196).
+    AnalyticsPeriodsList:
+      type: object
+      required:
+      - periods
+      properties:
+        periods:
+          type: array
+          description: Периоды с покрытыми выпиской днями, новые первыми. Пустой — данных нет.
+          items:
+            $ref: '#/components/schemas/AnalyticsPeriodItem'
+    AnalyticsPeriodItem:
+      type: object
+      required:
+      - key
+      - range
+      - coverage
+      properties:
+        key:
+          $ref: '#/components/schemas/PeriodKey'
+        range:
+          $ref: '#/components/schemas/Range'
+        coverage:
+          type: string
+          description: Как `AnalyticsPeriodInfo.coverage`, кроме `no_data`.
+          x-extensible-enum:
+          - complete
+          - partial
+          - no_data
+    AskRequest:
+      type: object
+      required:
+      - text
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Вопрос (набранный или распознанный на устройстве).
+        transfer_mode:
+          type: string
+          description: Режим переводов, выбранный на «Аналитике». Неизвестное значение сервер отклоняет 400.
+          x-extensible-enum:
+          - with
+          - without
+          default: with
+    AskResponse:
+      type: object
+      required:
+      - question
+      - answer_id
+      - remaining_limit
+      properties:
+        question:
+          $ref: '#/components/schemas/Message'
+        answer_id:
+          type: string
+          description: ID ответа; по нему — `streamAnswer`.
+        remaining_limit:
+          type: integer
+          description: Осталось вопросов на сегодня; окончательное значение — в `done`.
+    RetryResponse:
+      type: object
+      required:
+      - answer_id
+      - remaining_limit
+      properties:
+        answer_id:
+          type: string
+        remaining_limit:
+          type: integer
+    AssistantLimit:
+      type: object
+      required:
+      - remaining
+      - daily_max
+      - resets_at
+      properties:
+        remaining:
+          type: integer
+          minimum: 0
+        daily_max:
+          type: integer
+        resets_at:
+          type: string
+          format: date-time
+          description: Полночь по Москве с поясом `+03:00`; при другом поясе телефона клиент добавляет местное время.
+    MessagesList:
+      type: object
+      required:
+      - messages
+      - has_older
+      properties:
+        messages:
+          type: array
+          description: Старые первыми.
+          items:
+            $ref: '#/components/schemas/Message'
+        has_older:
+          type: boolean
+    Message:
+      type: object
+      required:
+      - id
+      - role
+      - currency
+      - created_at
+      properties:
+        currency:
+          type: string
+          description: 'Валюта сумм в `blocks` (ISO 4217), есть у каждого сообщения; сейчас всегда `RUB`. У вопроса сумм нет, но поле тоже обязательное: так схема гарантирует валюту ответа без разделения `Message` по ролям (осознанный компромисс). Поля валюты в профиле пока нет, поэтому у вопросов и у сообщений, сохранённых до появления поля, — `RUB`.'
+        id:
+          type: string
+        role:
+          type: string
+          description: '`user` — вопрос, `assistant` — ответ. Неизвестная роль — сообщение не показывать.'
+          x-extensible-enum:
+          - user
+          - assistant
+        text:
+          type: string
+          nullable: true
+          description: Только у `user`.
+        status:
+          type: string
+          nullable: true
+          description: |
+            Только у `assistant`: `complete`; `generating` — клиент открывает `streamAnswer`; `failed` — попытка
+            возвращена. Неизвестный — как `failed`.
+          x-extensible-enum:
+          - generating
+          - complete
+          - failed
+        error_code:
+          type: string
+          nullable: true
+          description: 'Только у `failed`: коды `AnswerErrorEvent.code`. Клиент по коду не строит текст и не решает о повторе;
+            неизвестный — по общим правилам `error_user_message` и `retryable`, как известный. При present-invalid внутреннем
+            Status сервер отдаёт INTERNAL_ERROR (не null), без чтения legacy-кода. Совпадение с REST-кодом
+            не включает auth/maintenance/quota или возобновление исходного Ask; явный domain retryable от сервиса сохраняется.'
+          x-extensible-enum:
+          - MODEL_ERROR
+          - CANNOT_ANSWER
+          - OFF_TOPIC
+          - INTERNAL_ERROR
+        error_text:
+          type: string
+          nullable: true
+          description: 'Прежний безопасный текст FIN-159 только у failed. Новый BFF заполняет тем же текстом своего
+            каталога, что error_user_message. Новый клиент использует его только при отсутствии error_user_message
+            и корректной строке по правилам UserMessage; иначе — «Не получилось ответить».'
+        error_user_message:
+          $ref: '#/components/schemas/UserMessage'
+        error_severity:
+          $ref: '#/components/schemas/ErrorSeverity'
+        retryable:
+          type: boolean
+          nullable: true
+          description: 'Только у `failed`; сервер присылает всегда, начиная с FIN-159: доступен ли повтор (`retryAnswer`), как `AnswerErrorEvent.retryable`.
+            Это новая генерация с новым логическим POST/ключом, не повтор исходного AskQuestion и не REST Error.retryable.
+            `true` — «Повторить»; `false` — без. Поля нет — «Повторить» только при `error_code` = `MODEL_ERROR`, как до FIN-159.'
+        charged:
+          type: boolean
+          nullable: true
+          description: Только у `complete` — списана ли попытка.
+        blocks:
+          type: array
+          nullable: true
+          description: Только у `assistant`. У `generating` — на момент запроса, у `failed` — пустой.
+          items:
+            $ref: '#/components/schemas/Block'
+        chips:
+          type: array
+          nullable: true
+          description: Только у `complete`.
+          items:
+            $ref: '#/components/schemas/Chip'
+        source:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/AnswerSource'
+          description: Только у `complete`; `changed_since` пересчитывается на момент запроса.
+          type: object
+        created_at:
+          type: string
+          format: date-time
+    Block:
+      type: object
+      description: |
+        Блок общего каталога (api.md «Блоки», FIN-4): экран «Аналитика» (6.1) и ответ помощника (7.2). Оболочка общая,
+        содержимое — в `data` по схеме примитива `type` версии `v`: `heading` — `HeadingData`, `text` — `TextData`,
+        `rows` — `RowsData`, `chart` — `ChartData`, `tile_group` — `TileGroupData`, `ranked_list` — `RankedListData`,
+        `insight_card` — `InsightCardData`. Неизвестный `type` или `v` клиент не рисует: показывает `alt_text`, если он
+        есть, иначе пропускает блок. Блок, который не удалось разобрать, пропускается, остальной экран показывается.
+      required:
+      - type
+      - v
+      properties:
+        id:
+          type: string
+          nullable: true
+          description: Только в 6.1 — стабильный id блока; выключатель Remote Config `analytics.block.<id>`, события показа.
+        type:
+          type: string
+          x-extensible-enum:
+          - heading
+          - text
+          - rows
+          - chart
+          - tile_group
+          - ranked_list
+          - insight_card
+        v:
+          type: integer
+          minimum: 1
+          description: Версия схемы `data` для этого типа.
+        status:
+          $ref: '#/components/schemas/BlockStatus'
+        lock:
+          $ref: '#/components/schemas/BlockLock'
+        title:
+          type: string
+          nullable: true
+        alt_text:
+          type: string
+          nullable: true
+          description: Текстовая версия для TalkBack и для клиента, который тип не знает. Есть у всех, кроме `text` и `heading`.
+        empty_text:
+          type: string
+          nullable: true
+          description: Текст при `none` и `unavailable`.
+        data:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Содержимое примитива (схемы `*Data`); есть при `ready` и `tentative`, у `tile_group` и `insight_card` — всегда.
+        action:
+          $ref: '#/components/schemas/BlockAction'
+    BlockStatus:
+      type: string
+      nullable: true
+      description: |
+        `ready` (нет поля — тоже) — посчитано; `tentative` — предварительно, данных мало; `locked` — пока не считаем,
+        причина в `lock`; `none` — проверили, ничего нет; `unavailable` — значения нет: не удалось посчитать или
+        показатель новый и ещё не посчитан (при смене правил расчёта до пересчёта приходит прежнее значение, FIN-196);
+        остальной экран показывается. Неизвестное — как `locked`.
+      x-extensible-enum:
+      - ready
+      - tentative
+      - locked
+      - none
+      - unavailable
+    TileLock:
+      type: object
+      nullable: true
+      description: |
+        Блокировка плитки внутри `data` блока `tile_group` — те же поля, что у `BlockLock`, но `text` может быть пустым
+        или отсутствовать: `bank-bff` не заглядывает в `data` и текст не подставляет, «Пока недоступно» показывает
+        клиент (grpc-api.md 5.3).
+      required:
+      - reason
+      properties:
+        reason:
+          type: string
+          description: Как `BlockLock.reason`. Неизвестное — блокировка без подробностей.
+          x-extensible-enum:
+          - need_full_months
+          - need_months_with_data
+          - too_early_in_month
+          - stale_data
+        text:
+          type: string
+          nullable: true
+        required:
+          type: integer
+          nullable: true
+        available:
+          type: integer
+          nullable: true
+        available_from:
+          type: string
+          format: date-time
+          nullable: true
+    BlockLock:
+      type: object
+      nullable: true
+      description: Только при `locked`.
+      required:
+      - reason
+      - text
+      properties:
+        reason:
+          type: string
+          description: Для статистики и иконки. Неизвестное — блокировка без подробностей.
+          x-extensible-enum:
+          - need_full_months
+          - need_months_with_data
+          - too_early_in_month
+          - stale_data
+        text:
+          type: string
+          description: |
+            Готовый текст блокировки («Нужно 3 полных месяца, есть 1»); клиент показывает как есть. Есть всегда:
+            если сервис его не заполнил, `bank-bff` ставит общий «Пока недоступно» (grpc-api.md 5.3). Блокировка
+            плитки внутри `data` — `TileLock`, там текст может отсутствовать.
+        required:
+          type: integer
+          nullable: true
+        available:
+          type: integer
+          nullable: true
+        available_from:
+          type: string
+          format: date-time
+          nullable: true
+    BlockAction:
+      type: object
+      nullable: true
+      description: |
+        Действие из фиксированного словаря: `open_operations` — Поиск с `filter`; `open_assistant` — чат помощника;
+        `dismiss_regular_payment` — кнопка `label` у строки платежа (6.3 с `payment_id`). Неизвестное — элемент не
+        нажимается. Поля своего `type` обязательны (`filter`; `payment_id` и `label`): без них действие — как
+        неизвестное, кнопка не показывается. Пустая строка и `filter` без условий — как отсутствие. Условие — хотя бы одно из
+        `from`/`to`, `q`, `category_id`, `kind`, `amount_from`/`amount_to`, `selection`; `transfer_mode` и `selection_name`
+        не в счёт. Значения «все» у `kind` нет: без направления поля нет.
+      required:
+      - type
+      properties:
+        type:
+          type: string
+          x-extensible-enum:
+          - open_operations
+          - open_assistant
+          - dismiss_regular_payment
+        filter:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/OperationsFilter'
+          type: object
+        payment_id:
+          type: string
+          nullable: true
+          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+          description: ID регулярного платежа (UUID) для 6.3.
+        label:
+          type: string
+          nullable: true
+    ValueKind:
+      type: string
+      description: |
+        Что за число в паре `value` + `value_kind`: `amount` — сумма в минимальных единицах валюты ответа, со знаком;
+        `percent` — доля 0–1; `count` — количество. Неизвестное — значение не показывается.
+      x-extensible-enum:
+      - amount
+      - percent
+      - count
+    HeadingData:
+      type: object
+      description: '`heading` v1 — заголовок раздела.'
+      required:
+      - text
+      properties:
+        text:
+          type: string
+    TextData:
+      type: object
+      description: '`text` v1 — текст в подмножестве Markdown (абзацы, `**жирный**`, список `- `).'
+      required:
+      - text
+      properties:
+        text:
+          type: string
+    RowsData:
+      type: object
+      description: '`rows` v1 — строки «подпись — значение». Строку без значения и текста клиент пропускает.'
+      required:
+      - rows
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockRow'
+    BlockRow:
+      type: object
+      required:
+      - label
+      properties:
+        label:
+          type: string
+        sublabel:
+          type: string
+          nullable: true
+        value:
+          type: number
+          format: double
+          nullable: true
+        value_kind:
+          $ref: '#/components/schemas/ValueKind'
+        text:
+          type: string
+          nullable: true
+        action:
+          $ref: '#/components/schemas/BlockAction'
+    ChartData:
+      type: object
+      description: '`chart` v1 — столбцы по периодам, с итогом и строками под графиком.'
+      required:
+      - kind
+      - value_kind
+      - points
+      properties:
+        kind:
+          type: string
+          description: '`bar` — столбцы. Неизвестный — показать `alt_text`.'
+          x-extensible-enum:
+          - bar
+        value_kind:
+          $ref: '#/components/schemas/ValueKind'
+        points:
+          type: array
+          description: Точки, старые первыми; может быть пустым (только итог).
+          items:
+            $ref: '#/components/schemas/ChartPoint'
+        highlight_index:
+          type: integer
+          nullable: true
+          minimum: 0
+        show_values:
+          type: boolean
+          nullable: true
+        summary:
+          $ref: '#/components/schemas/BlockValue'
+        caption:
+          type: string
+          nullable: true
+        notes:
+          type: array
+          nullable: true
+          items:
+            type: object
+            required:
+            - text
+            properties:
+              text:
+                type: string
+              tone:
+                type: string
+                description: '`primary` или `muted`; неизвестное — `muted`.'
+                x-extensible-enum:
+                - primary
+                - muted
+    ChartPoint:
+      type: object
+      required:
+      - range
+      - coverage
+      properties:
+        range:
+          allOf:
+          - $ref: '#/components/schemas/Range'
+          description: Период точки; подпись оси клиент формирует из него.
+        value:
+          type: number
+          format: double
+          nullable: true
+          description: Значение по `value_kind`; нет — за период нет данных (пустой столбец, не ноль).
+        coverage:
+          $ref: '#/components/schemas/Coverage'
+        data_from:
+          type: string
+          format: date-time
+          nullable: true
+        data_to:
+          type: string
+          format: date-time
+          nullable: true
+        note:
+          type: string
+          nullable: true
+          description: Подпись неполного столбца («по 25-е»).
+    BlockValue:
+      type: object
+      nullable: true
+      required:
+      - value
+      - value_kind
+      properties:
+        label:
+          type: string
+          nullable: true
+        value:
+          type: number
+          format: double
+        value_kind:
+          $ref: '#/components/schemas/ValueKind'
+        action:
+          $ref: '#/components/schemas/BlockAction'
+    TileGroupData:
+      type: object
+      description: '`tile_group` v1 — плитки по две в ряд, по порядку.'
+      required:
+      - tiles
+      properties:
+        tiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tile'
+    Tile:
+      type: object
+      required:
+      - id
+      - title
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          $ref: '#/components/schemas/BlockStatus'
+        lock:
+          $ref: '#/components/schemas/TileLock'
+        value:
+          type: number
+          format: double
+          nullable: true
+        value_kind:
+          $ref: '#/components/schemas/ValueKind'
+        approx:
+          type: boolean
+          nullable: true
+        show_plus:
+          type: boolean
+          nullable: true
+        caption:
+          type: string
+          nullable: true
+        action:
+          $ref: '#/components/schemas/BlockAction'
+    RankedListData:
+      type: object
+      description: '`ranked_list` v1 — список по убыванию с полосами.'
+      required:
+      - items
+      properties:
+        total:
+          $ref: '#/components/schemas/BlockValue'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RankedItem'
+        visible_count:
+          type: integer
+          nullable: true
+          minimum: 1
+        more_label:
+          type: string
+          nullable: true
+        empty_text:
+          type: string
+          nullable: true
+        style:
+          type: string
+          nullable: true
+          description: '`bars` (по умолчанию) — полосы и доли; `plain` — строки без полос. Неизвестное — `bars`.'
+          x-extensible-enum:
+          - bars
+          - plain
+    RankedItem:
+      type: object
+      required:
+      - icon
+      - title
+      - value
+      - value_kind
+      properties:
+        id:
+          type: string
+          nullable: true
+          description: Ключ элемента; у категорий — `category_id` (у «Без категории» — `cat_uncategorized`). Нет — у элемента
+            нет ключа.
+        icon:
+          type: string
+        title:
+          type: string
+        note:
+          type: string
+          nullable: true
+        value:
+          type: number
+          format: double
+        value_kind:
+          $ref: '#/components/schemas/ValueKind'
+        share:
+          type: number
+          format: double
+          nullable: true
+        show_plus:
+          type: boolean
+          nullable: true
+        action:
+          $ref: '#/components/schemas/BlockAction'
+    InsightCardData:
+      type: object
+      description: '`insight_card` v1 — карточка-наблюдение.'
+      required:
+      - icon
+      - title
+      properties:
+        icon:
+          type: string
+        title:
+          type: string
+        badge:
+          type: string
+          nullable: true
+        value:
+          type: number
+          format: double
+          nullable: true
+        value_kind:
+          $ref: '#/components/schemas/ValueKind'
+        approx:
+          type: boolean
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        items:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/InsightItem'
+        items_more:
+          $ref: '#/components/schemas/BlockValue'
+    InsightItem:
+      type: object
+      required:
+      - title
+      properties:
+        title:
+          type: string
+        sublabel:
+          type: string
+          nullable: true
+        value:
+          type: number
+          format: double
+          nullable: true
+        value_kind:
+          $ref: '#/components/schemas/ValueKind'
+        value_suffix:
+          type: string
+          nullable: true
+          description: Приписка к значению («в месяц»).
+        muted:
+          type: boolean
+          nullable: true
+        action:
+          $ref: '#/components/schemas/BlockAction'
+        button:
+          $ref: '#/components/schemas/BlockAction'
+    Chip:
+      type: object
+      description: Чип-переход под ответом (и событие `chip`). Неизвестный `screen` — чип не показывать.
+      required:
+      - label
+      - screen
+      properties:
+        label:
+          type: string
+        screen:
+          type: string
+          description: '`operations` — Поиск с `filters`; `analytics` — «Аналитика» с `params`.'
+          x-extensible-enum:
+          - operations
+          - analytics
+        filters:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/OperationsFilter'
+          description: Для `operations`; всегда с `transfer_mode` ответа.
+          type: object
+        params:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/AnalyticsParams'
+          description: Для `analytics`.
+          type: object
+    AnswerSource:
+      type: object
+      description: Строка источника под ответом (и событие `source`).
+      required:
+      - calculated_at
+      - transfer_mode
+      - changed_since
+      - changed_since_text
+      properties:
+        calculated_at:
+          type: string
+          format: date-time
+        data_range:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/Range'
+          type: object
+        transfer_mode:
+          $ref: '#/components/schemas/TransferMode'
+        changed_since:
+          type: array
+          description: |
+            Что изменилось после расчёта: `categories` — «с тех пор категории менялись»; `uploads` — загружали или
+            удаляли выписки. Пустой — ничего. Неизвестное — общий текст «с тех пор данные менялись».
+          items:
+            type: string
+            x-extensible-enum:
+            - categories
+            - uploads
+        changed_since_text:
+          type: string
+          nullable: true
+          description: |
+            Готовый текст о том же («с тех пор категории менялись»); нет — ничего не менялось. Для неизвестного кода
+            клиент показывает его (FIN-82).
+    AnswerSnapshotEvent:
+      type: object
+      description: Событие `snapshot` — всегда первое; клиент заменяет им показанное. При status failed сразу
+        следует терминальное error с пользовательским текстом и оформлением; отдельные поля ошибки в snapshot не добавляются.
+      required:
+      - status
+      - blocks
+      - chips
+      - currency
+      properties:
+        currency:
+          type: string
+          description: Валюта всех сумм в блоках ответа (ISO 4217); сейчас всегда `RUB`.
+        status:
+          type: string
+          description: Как `Message.status`. Неизвестное — как `failed`.
+          x-extensible-enum:
+          - generating
+          - complete
+          - failed
+        blocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Block'
+        chips:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chip'
+        source:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/AnswerSource'
+          type: object
+    AnswerChunkEvent:
+      type: object
+      description: Событие `chunk` — фрагмент текстового блока.
+      required:
+      - index
+      - text
+      properties:
+        index:
+          type: integer
+          minimum: 0
+          description: Номер текстового блока. Равен числу полученных блоков — начинается новый; меньше — дописать в существующий.
+        text:
+          type: string
+    AnswerBlockEvent:
+      type: object
+      description: Событие `block` — готовый нетекстовый блок целиком.
+      required:
+      - index
+      - block
+      properties:
+        index:
+          type: integer
+          minimum: 0
+          description: Номер блока; всегда следующий по порядку.
+        block:
+          $ref: '#/components/schemas/Block'
+    AnswerDoneEvent:
+      type: object
+      description: Терминальное событие `done` — ответ готов и сохранён.
+      required:
+      - charged
+      - remaining_limit
+      properties:
+        charged:
+          type: boolean
+          description: '`false` — данных для полного ответа не хватило (по результатам функций), попытка не списана.'
+        remaining_limit:
+          type: integer
+    AnswerErrorEvent:
+      type: object
+      description: |
+        Терминальное событие `error`, попытка возвращена. Клиент показывает `user_message` по общим правилам
+        (при отсутствии — прежний безопасный `text`) вместо ответа, «Повторить»
+        (`retryAnswer`) — только при `retryable: true`; по `code` текст не строит и о повторе не решает, поэтому
+        неизвестный код обрабатывается по общим правилам пользовательского текста и `retryable`, как известный.
+      required:
+      - code
+      - message
+      - remaining_limit
+      example:
+        code: OFF_TOPIC
+        user_message: 'Вопрос не по теме — помощник отвечает только на вопросы о ваших финансах. С другими вопросами помогут
+          универсальные ассистенты: Алиса AI, GigaChat, ChatGPT, Claude, DeepSeek'
+        severity: warning
+        text: 'Вопрос не по теме — помощник отвечает только на вопросы о ваших финансах. С другими вопросами помогут
+          универсальные ассистенты: Алиса AI, GigaChat, ChatGPT, Claude, DeepSeek'
+        retryable: false
+        message: off_topic tool called
+        remaining_limit: 5
+      properties:
+        code:
+          type: string
+          description: |
+            `MODEL_ERROR` — сбой или таймаут Alice AI; `CANNOT_ANSWER` — вопрос непонятен или на него нельзя ответить
+            по данным; канонический открытый reason валидного внутреннего Status переносится как code без ограничения
+            старым enum/unary-реестром. При present-invalid Status внешний code=INTERNAL_ERROR, legacy-код не читается.
+            Совпадение reason с REST-кодом не включает REST auth/maintenance/quota или resume исходного Ask;
+            permission новой попытки остаётся независимым внешним retryable от сервиса.
+            `OFF_TOPIC` — вопрос не о данных пользователя и не о личных финансах (модель вызвала инструмент
+            `off_topic`, FIN-159); `INTERNAL_ERROR` — консервативная прежняя причина при отсутствии канонического
+            Status/известного legacy-кода, а также при present-invalid Status. Корректный открытый reason сохраняется, даже если его нет в каталоге;
+            `user_message` и прежний `text` — из каталога BFF, `retryable` — от сервиса помощника;
+            сбой самого потока — не `error`, а закрытие без терминального события.
+            Каждый терминальный OFF_TOPIC также учитывается в отдельном лимите `askAssistant` / `retryAnswer`;
+            повторная доставка события и чтение истории его не увеличивают (docs/api.md, раздел 7, FIN-222).
+            Для аналитики и логов и для запасного правила, когда `retryable` нет.
+          x-extensible-enum:
+          - MODEL_ERROR
+          - CANNOT_ANSWER
+          - OFF_TOPIC
+          - INTERNAL_ERROR
+        text:
+          type: string
+          nullable: true
+          description: |
+            Прежний безопасный текст FIN-159; новый BFF заполняет тем же текстом каталога, что user_message.
+            Новый клиент использует только при отсутствии user_message и корректной строке по правилам UserMessage;
+            иначе — «Не получилось ответить». Сейчас: `MODEL_ERROR` — «Не получилось ответить. Вопрос не
+            потрачен»; `CANNOT_ANSWER` — полный прежний текст макета `Chat` (FIN-159, без сокращения); `OFF_TOPIC` — «Вопрос не по теме — помощник отвечает только на вопросы о ваших финансах. С
+            другими вопросами помогут универсальные ассистенты: Алиса AI, GigaChat, ChatGPT, Claude, DeepSeek».
+        user_message:
+          $ref: '#/components/schemas/UserMessage'
+        severity:
+          $ref: '#/components/schemas/ErrorSeverity'
+        retryable:
+          type: boolean
+          nullable: true
+          description: Доступен ли повтор (`retryAnswer`); `true` — «Повторить». Сейчас `true` только у `MODEL_ERROR`. Сервер
+            присылает всегда, начиная с FIN-159; нет (старая версия сервера) — «Повторить» только при `code` = `MODEL_ERROR`.
+            Это новая генерация с новым логическим POST/ключом, не повтор исходного AskQuestion и не REST Error.retryable.
+        message:
+          type: string
+          description: Для логов и отладки, не для показа.
+        remaining_limit:
+          type: integer

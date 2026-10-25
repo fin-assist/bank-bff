@@ -140,7 +140,6 @@ func TestAPIHTTPScaffoldExposesOnlyOperationalEndpoints(t *testing.T) {
 
 func TestIntegrationHTTPProtocolAndIndependentListeners(t *testing.T) {
 	cleanEnvironment(t)
-	t.Setenv("ENV", "stage")
 	t.Setenv("LOG_FORMAT", "text")
 	t.Setenv("LOG_LEVEL", "debug")
 	addr, _, _ := startBFF(t)
@@ -187,11 +186,17 @@ func startupFailures(t *testing.T) {
 	for _, tc := range []struct{ key, value string }{
 		{"ENV", "bad"}, {"LOG_FORMAT", "bad"}, {"LOG_LEVEL", "bad"}, {"PUBLIC_ADDR", ":-1"}, {"HTTP_ADDR", ":65536"},
 		{"SHUTDOWN_DELAY", "-1s"}, {"SHUTDOWN_TIMEOUT", "0s"},
+		// stage and prod serve the public API and require its peers, identity and versions.
+		{"ENV", "stage"}, {"ENV", "prod"},
 	} {
 		t.Run(tc.key, func(t *testing.T) {
 			t.Setenv(tc.key, tc.value)
 			var output bytes.Buffer
-			if code := execute(t.Context(), []string{"serve"}, &output); code != 1 || !strings.Contains(output.String(), tc.key) {
+			want := tc.key
+			if tc.key == "ENV" && tc.value != "bad" {
+				want = "USER_GRPC_ADDR is required in " + tc.value
+			}
+			if code := execute(t.Context(), []string{"serve"}, &output); code != 1 || !strings.Contains(output.String(), want) {
 				t.Fatalf("bad %s accepted: %d %s", tc.key, code, output.String())
 			}
 		})
@@ -237,7 +242,6 @@ func startupFailures(t *testing.T) {
 	// Configure both log formats through the real command and listener assembly.
 	t.Run("text-format", func(t *testing.T) {
 		t.Setenv("LOG_FORMAT", "text")
-		t.Setenv("ENV", "prod")
 		_, stop, _ := startBFF(t)
 		stop()
 	})
