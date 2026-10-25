@@ -11,8 +11,14 @@ EnvironmentFile=/etc/finassist/bank-bff/env
 Environment=ENV=stage
 # Both listeners stay on loopback: public traffic arrives only through the local nginx with TLS,
 # the operational port (/metrics, /readyz, /healthz) is never reachable from outside the host.
+# The addresses belong to this unit: EnvironmentFile overrides Environment, so the env file
+# must not set PUBLIC_ADDR or HTTP_ADDR.
 Environment=PUBLIC_ADDR=127.0.0.1:8080
 Environment=HTTP_ADDR=127.0.0.1:9091
+# Defense in depth independent of the environment: only loopback traffic is allowed.
+# Future outgoing peer calls (gRPC services) need explicit IPAddressAllow entries.
+IPAddressAllow=localhost
+IPAddressDeny=any
 DynamicUser=yes
 Restart=on-failure
 RestartSec=2s
