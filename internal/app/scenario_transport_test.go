@@ -358,8 +358,11 @@ func scenarioTrustedProxies(t *testing.T, start starter) {
 	done := make(chan struct{}, 2)
 	for _, client := range []string{"198.51.100.1", "198.51.100.2"} {
 		go func() {
-			if got, err := b.fetch(t.Context(), watch(client)); err != nil || got.StatusCode != 200 {
-				t.Errorf("stream of %s: %v %d %s", client, err, got.StatusCode, got.body)
+			switch got, err := b.fetch(t.Context(), watch(client)); {
+			case err != nil:
+				t.Errorf("stream of %s: %v", client, err)
+			case got.StatusCode != 200:
+				t.Errorf("stream of %s: %d %s", client, got.StatusCode, got.body)
 			}
 			done <- struct{}{}
 		}()
