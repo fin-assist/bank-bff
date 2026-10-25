@@ -184,6 +184,10 @@ func TestUnitAskRetryLimit(t *testing.T) {
 	if r.Code != 201 || ask.GetTransferMode() != commonv1.TransferMode_TRANSFER_MODE_WITHOUT || r.json["answer_id"] != "a1" || r.json["remaining_limit"] != 4.0 || q["currency"] != "RUB" || q["created_at"] != "2026-10-04T22:10:00+03:00" {
 		t.Fatalf("%d %v", r.Code, r.json)
 	}
+	if r := u.serve(t, "POST", "/v1/assistant/messages", `{"text":"valid","Text":"","TEXT":"x","transfer_Mode":"without"}`, nil); r.Code != 201 || ask.GetText() != "valid" ||
+		ask.GetTransferMode() != commonv1.TransferMode_TRANSFER_MODE_UNSPECIFIED {
+		t.Fatalf("members are decoded by exact name: %d %q %v", r.Code, ask.GetText(), ask.GetTransferMode())
+	}
 	u.serve(t, "POST", "/v1/assistant/messages", `{"text":"Сколько?"}`, nil)
 	if ask.GetTransferMode() != commonv1.TransferMode_TRANSFER_MODE_UNSPECIFIED {
 		t.Fatal("absent transfer_mode is the default")

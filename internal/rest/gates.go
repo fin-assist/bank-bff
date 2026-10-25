@@ -66,8 +66,10 @@ func ParseClient(header string) (Client, bool) {
 	return Client{Platform: m[1], Version: v}, true
 }
 
-// Label is the bounded metric label: platform/MAJOR.MINOR.
-func (c Client) Label() string { return c.Platform + "/" + c.Version[0] + "." + c.Version[1] }
+// Label is the bounded metric label: the platform only. Any version at or above the
+// minimum passes the gate, so a version in the label would let a client fill the
+// bounded label set with invented values.
+func (c Client) Label() string { return c.Platform }
 
 // Maintenance is the maintenance gate configuration.
 type Maintenance struct {

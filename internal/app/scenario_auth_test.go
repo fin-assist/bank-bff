@@ -121,8 +121,16 @@ func scenarioStartPhone(t *testing.T, start starter) {
 		if r.StatusCode != pe.status || errorCode(r) != pe.code {
 			t.Fatalf("%v: %d %s", pe.err, r.StatusCode, r.body)
 		}
-		if strings.Contains(string(r.body), "10.0.0.7") || strings.Contains(string(r.body), "digits") && pe.code != "VALIDATION_ERROR" {
+		// Neither a status message nor a violation description of the service reaches
+		// the client: the detail message is the BFF's own.
+		if strings.Contains(string(r.body), "10.0.0.7") || strings.Contains(string(r.body), "digits") {
 			t.Fatalf("internal text leaked: %s", r.body)
+		}
+		if pe.code == "VALIDATION_ERROR" {
+			d := r.json["error"].(map[string]any)["details"].([]any)[0].(map[string]any)
+			if d["field"] != "phone" || d["code"] != "INVALID_FORMAT" || d["message"] != "has invalid format" {
+				t.Fatalf("detail %v", d)
+			}
 		}
 	}
 	calls := len(b.peers.Calls(userv1.AuthService_StartPhoneVerification_FullMethodName))
@@ -151,13 +159,23 @@ func scenarioRequestTooLarge(t *testing.T, start starter) {
 	for _, route := range []string{"/v1/auth/phone", "/v1/auth/register", "/v1/auth/token", "/v1/assistant/messages"} {
 		big := request{method: "POST", path: route, route: route, body: `{"phone":"` + strings.Repeat("1", 70000) + `"}`,
 			header: base(map[string]string{"Idempotency-Key": idemKey, "Authorization": "Bearer " + b.keys.Access("u1")})}
-		resp, body := b.raw(t, big) //nolint:bodyclose // raw reads and closes the body.
+		got := b.raw(t, big)
+		resp, body := got.Response, got.body
 		req, _ := http.NewRequest(big.method, "http://"+b.public+route, nil)
 		if resp.StatusCode != 413 || !strings.Contains(string(body), `"code":"REQUEST_TOO_LARGE"`) {
 			t.Fatalf("%s: %d %s", route, resp.StatusCode, body)
 		}
 		if err := b.contract.Check(t, big.method, route, req, resp, body); err == nil {
 			t.Fatalf("%s: the embedded contract now declares 413; drop this FIN-339 note", route)
+		}
+	}
+	// The token is checked before the body: without Authorization an oversized body and
+	// a body outside the schema are both 401, not 413 or 400.
+	for _, body := range []string{`{"text":"` + strings.Repeat("1", 70000) + `"}`, `{"text":5}`} {
+		r := b.do(t, request{method: "POST", path: "/v1/assistant/messages", route: "/v1/assistant/messages", body: body,
+			header: base(map[string]string{"Idempotency-Key": idemKey})})
+		if r.StatusCode != 401 || errorCode(r) != "INVALID_TOKEN" {
+			t.Fatalf("no token, %d-byte body: %d %s", len(body), r.StatusCode, r.body)
 		}
 	}
 	for _, c := range b.peers.Calls("") {
@@ -187,7 +205,8 @@ func scenarioWatchPhone(t *testing.T, start starter) {
 		}
 	})
 	r := request{method: "GET", path: "/v1/auth/phone/events", route: "/v1/auth/phone/events", header: base(map[string]string{"X-Verification-Token": "vt"})}
-	resp, body := b.raw(t, r) //nolint:bodyclose // raw reads and closes the body.
+	got := b.raw(t, r)
+	resp, body := got.Response, got.body
 	events, pings := b.contract.Events(t, "GET", r.route, strings.NewReader(string(body)))
 	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/event-stream" || resp.Header.Get("Date") == "" || len(events) != 2 ||
 		events[0].Data["status"] != "pending" || events[1].Data["access_token"] != "at" || token != "vt" || pings == 0 {

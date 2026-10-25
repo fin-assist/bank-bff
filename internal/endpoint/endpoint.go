@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
+	"strings"
 	"time"
 
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
@@ -107,17 +109,67 @@ func (d Deps) Routes() []rest.Route {
 	}
 }
 
+// openStream takes a stream slot, extends the connection deadlines to the stream's
+// own deadline before the first peer message is awaited (a late refusal is still a
+// JSON answer), and returns the stream context: it ends at timeout, when the client
+// leaves or on shutdown. done cancels it and releases the slot; it may be called more
+// than once. On refusal the answer is written and ok is false.
+func openStream(c *rest.Call, timeout time.Duration) (ctx context.Context, done func(), ok bool) {
+	release, ok := c.Streams.Acquire(rest.HintsFrom(c.R.Context()).ClientIP)
+	if !ok {
+		c.Metrics.StreamRejected(c.Op.Route.Path)
+		c.Streams.Busy(c.Clock()).Write(c.W)
+		return nil, nil, false
+	}
+	if err := rest.ExtendDeadlines(c.W, time.Now().Add(timeout+streamWriteMargin)); err != nil {
+		release()
+		c.Log.WarnContext(c.R.Context(), "stream deadline not extended")
+		rest.Internal().Write(c.W)
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithTimeout(c.R.Context(), timeout)
+	detach := c.Streams.StopOnShutdown(cancel)
+	return ctx, func() {
+		detach()
+		cancel()
+		release()
+	}, true
+}
+
 // unary returns the request context bounded by UnaryDeadline.
 func unary(c *rest.Call) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(c.R.Context(), UnaryDeadline)
 }
 
-// decode reads the validated body; a body that passed the schema always decodes, so
-// a failure is answered as a validation error rather than trusted.
+// decode reads the validated body into the flat struct v; a body that passed the
+// schema always decodes, so a failure is answered as a validation error rather than
+// trusted. Only members whose names equal a json tag of v exactly are decoded: the
+// schema validated exact names, while encoding/json matches field names case
+// insensitively, so {"text":"ok","Text":""} must not replace the validated text.
 func decode(c *rest.Call, v any) bool {
-	if err := json.Unmarshal(c.Body, v); err != nil {
+	if err := decodeExact(c.Body, v); err != nil {
 		rest.Validation(rest.Detail{Code: rest.DetailInvalidFormat, Message: "has invalid format"}).Write(c.W)
 		return false
 	}
 	return true
+}
+
+func decodeExact(body []byte, v any) error {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(body, &members); err != nil {
+		return err
+	}
+	t := reflect.TypeOf(v).Elem()
+	exact := make(map[string]json.RawMessage, t.NumField())
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if value, ok := members[name]; ok && name != "" {
+			exact[name] = value
+		}
+	}
+	b, err := json.Marshal(exact)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
 }

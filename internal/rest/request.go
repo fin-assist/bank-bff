@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
+	"strings"
 
 	"github.com/fin-assist/go-grpc/reqctx"
 )
@@ -27,7 +29,8 @@ type hintsKey struct{}
 // (grpc-api.md 4). They are computed or copied by the BFF itself, never taken from
 // arbitrary client metadata.
 type Hints struct {
-	// ClientIP is the address of the TCP peer of the client connection.
+	// ClientIP is the client address: the TCP peer, or the X-Forwarded-For element
+	// added by a trusted proxy (ClientIP).
 	ClientIP string
 	// ClientVersion is the validated X-Client-Version header.
 	ClientVersion string
@@ -59,8 +62,9 @@ func newRequestID() string {
 
 // RequestID assigns X-Request-Id (the client's UUID or a new one), echoes it in the
 // response and stores it for logs and the x-request-id metadata of outgoing calls.
-// A value of another shape is replaced, not echoed: it is client input.
-func RequestID(next http.Handler) http.Handler {
+// A value of another shape is replaced, not echoed: it is client input. It also
+// stores the client address (ClientIP with the trusted proxies).
+func RequestID(trusted []netip.Prefix, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-Id")
 		if !IsUUID(id) {
@@ -68,11 +72,62 @@ func RequestID(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-Id", id)
 		ctx := reqctx.WithRequestID(r.Context(), id)
-		ip := ""
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			ip = host
-		}
-		h := Hints{ClientIP: ip, ReadPrimary: r.Header.Get("X-Read-Primary") == "1"}
+		h := Hints{ClientIP: ClientIP(r, trusted), ReadPrimary: r.Header.Get("X-Read-Primary") == "1"}
 		next.ServeHTTP(w, r.WithContext(WithHints(ctx, h)))
 	})
+}
+
+// maxForwardedHops bounds the X-Forwarded-For chain that is examined.
+const maxForwardedHops = 16
+
+// ClientIP is the client address: the TCP peer, unless the peer is a trusted proxy.
+// Then X-Forwarded-For is read from the right, and the first address outside the
+// trusted networks is the client; every proxy appends the address it saw, so only
+// elements added by trusted proxies are believed. A missing, malformed or overlong
+// chain keeps the proxy address (never a client-chosen one); a chain of trusted
+// addresses only yields its leftmost element. Forwarding headers of an untrusted peer
+// are ignored.
+func ClientIP(r *http.Request, trusted []netip.Prefix) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return ""
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	peer = peer.Unmap()
+	if !isTrusted(peer, trusted) {
+		return peer.String()
+	}
+	var chain []string
+	for _, header := range r.Header.Values("X-Forwarded-For") {
+		chain = append(chain, strings.Split(header, ",")...)
+	}
+	if len(chain) == 0 || len(chain) > maxForwardedHops {
+		return peer.String()
+	}
+	addrs := make([]netip.Addr, 0, len(chain))
+	for _, element := range chain {
+		addr, err := netip.ParseAddr(strings.TrimSpace(element))
+		if err != nil {
+			return peer.String()
+		}
+		addrs = append(addrs, addr.Unmap())
+	}
+	for i := len(addrs) - 1; i >= 0; i-- {
+		if !isTrusted(addrs[i], trusted) {
+			return addrs[i].String()
+		}
+	}
+	return addrs[0].String()
+}
+
+func isTrusted(addr netip.Addr, trusted []netip.Prefix) bool {
+	for _, p := range trusted {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }

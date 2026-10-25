@@ -1,9 +1,7 @@
 package endpoint
 
 import (
-	"context"
 	"net/http"
-	"time"
 
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
 
@@ -78,16 +76,11 @@ func (d Deps) watchPhone(c *rest.Call) {
 	if values := c.R.Header.Values("X-Verification-Token"); len(values) == 1 && len(values[0]) <= maxVerificationToken {
 		token = values[0]
 	}
-	release, ok := c.Streams.Acquire(rest.HintsFrom(c.R.Context()).ClientIP)
+	ctx, done, ok := openStream(c, orDefault(d.PhoneStream, PhoneStreamDeadline))
 	if !ok {
-		c.Metrics.StreamRejected(c.Op.Route.Path)
-		c.Streams.Busy(c.Clock()).Write(c.W)
 		return
 	}
-	defer release()
-	timeout := orDefault(d.PhoneStream, PhoneStreamDeadline)
-	ctx, cancel := context.WithTimeout(c.R.Context(), timeout)
-	defer cancel()
+	defer done()
 	stream, err := d.Auth.WatchPhoneVerification(ctx, &userv1.WatchPhoneVerificationRequest{VerificationToken: token})
 	if err != nil {
 		c.Fail(err)
@@ -104,7 +97,7 @@ func (d Deps) watchPhone(c *rest.Call) {
 		rest.Internal().Write(c.W)
 		return
 	}
-	sse, err := rest.StartStream(c.W, time.Now().Add(timeout+streamWriteMargin))
+	sse, err := rest.StartStream(c.W)
 	if err != nil {
 		c.Log.WarnContext(ctx, "stream start failed")
 		return
@@ -115,7 +108,7 @@ func (d Deps) watchPhone(c *rest.Call) {
 	}
 	// A transport failure or an unknown status ends the stream without a terminal
 	// event: the client reconnects and receives the current state first.
-	_ = rest.Pump(ctx, stream.Recv, cancel, d.heartbeat(), sse.Ping, func(m *userv1.WatchPhoneVerificationResponse) (bool, error) {
+	_ = rest.Pump(ctx, stream.Recv, done, d.heartbeat(), sse.Ping, func(m *userv1.WatchPhoneVerificationResponse) (bool, error) {
 		event, terminal, ok := phoneStatus(m)
 		if !ok {
 			c.Metrics.Untranslated("WatchPhoneVerificationResponse.status", "unknown")

@@ -127,8 +127,8 @@ type response struct {
 // do sends a real HTTP request and validates a non-SSE answer against openapi.yaml.
 func (b *bff) do(t *testing.T, r request) response {
 	t.Helper()
-	resp, body := b.raw(t, r) //nolint:bodyclose // raw reads and closes the body.
-	out := response{Response: resp, body: body}
+	out := b.raw(t, r)
+	resp, body := out.Response, out.body
 	if resp.Header.Get("Content-Type") != "text/event-stream" {
 		req, _ := http.NewRequest(r.method, "http://"+b.public+r.path, nil)
 		out.json = b.contract.Response(t, r.method, r.route, req, resp, body)
@@ -139,7 +139,8 @@ func (b *bff) do(t *testing.T, r request) response {
 	return out
 }
 
-func (b *bff) raw(t *testing.T, r request) (*http.Response, []byte) {
+// raw sends a real HTTP request and returns the answer with its body read and closed.
+func (b *bff) raw(t *testing.T, r request) response {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -171,7 +172,7 @@ func (b *bff) raw(t *testing.T, r request) (*http.Response, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp, data
+	return response{Response: resp, body: data}
 }
 
 func errorCode(r response) string {
@@ -204,10 +205,23 @@ func startAssembly(t *testing.T, mutate func(*config.Config, *testpeer.Peers), o
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(api.handler)
+	// The same listener limits as Run, so stream deadline scenarios mean the same here.
+	srv := httptest.NewUnstartedServer(api.handler)
+	srv.Config = server(api.handler, log, o)
+	srv.Config.RegisterOnShutdown(api.streams.Shutdown)
+	srv.Start()
 	b := &bff{peers: peers, contract: testpeer.LoadContract(t), keys: keys, logs: logs, public: srv.Listener.Addr().String()}
 	var once sync.Once
-	b.stop = func() { once.Do(func() { srv.Close(); api.close(log) }) }
+	b.stop = func() {
+		once.Do(func() {
+			// Like Run: a graceful shutdown with a bound, then close what is left.
+			ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+			defer cancel()
+			_ = srv.Config.Shutdown(ctx)
+			srv.Close()
+			api.close(log)
+		})
+	}
 	t.Cleanup(b.stop)
 	return b
 }

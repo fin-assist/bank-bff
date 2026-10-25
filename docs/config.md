@@ -33,6 +33,7 @@
 | `SSE_MAX_STREAMS` | `2000` | Предел одновременных SSE-потоков процесса |
 | `SSE_MAX_STREAMS_PER_IP` | `20` | Предел одновременных SSE-потоков с одного адреса клиента |
 | `SSE_BUSY_RETRY_AFTER` | `10s` | Retry-After отказа 429 по пределу SSE-потоков; 1s–5m |
+| `TRUSTED_PROXIES` | — | CIDR доверенных прокси (nginx стенда, ingress) через запятую; только от них адрес клиента берётся из X-Forwarded-For; пусто — адрес TCP-пира |
 
 Адрес — `host:port` с числовым портом 0–65535; `:0` выбирает свободный порт для тестов. Фактические адреса публикуются в строке `serving`. Задержка остановки допустима от 0 до 1 минуты, timeout — больше 0 и до 5 минут. Некорректные настройки дают exit 1 до запуска listeners.
 
@@ -51,7 +52,7 @@
 
 ### Публичный API (FIN-268)
 
-В `stage` и `prod` публичный listener обслуживает 14 операций входа, профиля и помощника (`docs/server.md`). Обязательны `USER_GRPC_ADDR`, `ASSISTANT_GRPC_ADDR`, `AUTH_USER_ISSUER`, `AUTH_USER_AUDIENCE` и `CLIENT_MIN_VERSIONS`; без них старт завершается exit 1 до привязки портов. Идентичность собирает `go-identity` v0.2.0 `NewAssembly`: в `prod` — projected ServiceAccount token (`SERVICE_TOKEN_FILE`, отличный от API-токена пода) и JWKS API-сервера по HTTPS с CA из `AUTH_KUBERNETES_*` (пустые значения — значения по умолчанию библиотеки), в `stage` — три `AUTH_STAGE_*` файла; файлы стенда в `prod` — ошибка старта. Ключи проверки access JWT пользователя берутся из `user.GetSigningKeys` по `USER_GRPC_ADDR`.
+В `stage` и `prod` публичный listener обслуживает 14 операций входа, профиля и помощника (`docs/server.md`). Обязательны `USER_GRPC_ADDR`, `ASSISTANT_GRPC_ADDR`, `AUTH_USER_ISSUER`, `AUTH_USER_AUDIENCE` и `CLIENT_MIN_VERSIONS`; без них старт завершается exit 1 до привязки портов. Идентичность собирает `go-identity` v0.2.0 `NewAssembly`: в `prod` — projected ServiceAccount token (`SERVICE_TOKEN_FILE`, отличный от API-токена пода) и JWKS API-сервера по HTTPS с CA из `AUTH_KUBERNETES_*` (пустые значения — значения по умолчанию библиотеки), в `stage` — три `AUTH_STAGE_*` файла; файлы стенда в `prod` — ошибка старта. Ключи проверки access JWT пользователя берутся из `user.GetSigningKeys` по `USER_GRPC_ADDR`. За прокси (nginx стенда, ingress prod) задайте `TRUSTED_PROXIES` сетями этих прокси: иначе адресом клиента для `x-client-ip` и предела `SSE_MAX_STREAMS_PER_IP` у всех будет адрес прокси.
 
 В `dev` публичный mux пустой: любой путь — 404, как в каркасе FIN-261. `NewAssembly` не поддерживает `dev`, а обхода авторизации нет; локальная проверка API — только с настройками `stage`. БД, миграций, `AUTH_MODE` и входящего gRPC у BFF нет.
 

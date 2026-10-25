@@ -192,6 +192,8 @@ func TestUnitHandlerOrdersChecksAndRoutes(t *testing.T) {
 	}{
 		{"unknown v1 path", "GET", "/v1/unknown", "", nil, 404, "NOT_FOUND"},
 		{"unserved method", "PATCH", "/v1/profile", "{}", nil, 404, "NOT_FOUND"},
+		{"HEAD of a GET operation", "HEAD", "/v1/profile", "", map[string]string{"Authorization": "Bearer good"}, 404, "NOT_FOUND"},
+		{"version before HEAD", "HEAD", "/v1/profile", "", map[string]string{"X-Client-Version": ""}, 400, "CLIENT_VERSION_UNSUPPORTED"},
 		{"version before routing", "GET", "/v1/unknown", "", map[string]string{"X-Client-Version": ""}, 400, "CLIENT_VERSION_UNSUPPORTED"},
 		{"token before validation", "POST", "/v1/assistant/messages/a1/retry", "{}", nil, 401, "INVALID_TOKEN"},
 		{"version before token", "GET", "/v1/profile", "", map[string]string{"X-Client-Version": "android/0.1.0+1"}, 400, "CLIENT_VERSION_UNSUPPORTED"},
@@ -238,5 +240,24 @@ func TestUnitCallFailTranslates(t *testing.T) {
 	c.Fail(context.DeadlineExceeded)
 	if res.Code != 500 || decodeError(t, res.Body.String()).Code != "INTERNAL_ERROR" {
 		t.Fatalf("%d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestUnitHandlerDrainsABoundedUnreadBody(t *testing.T) {
+	h, err := Handler(handlerConfig(t), []Route{{Method: "GET", Path: "/v1/profile", Protected: Always, Handle: func(c *Call) { WriteNoContent(c.W) }}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		size, left int
+	}{{1000, 0}, {maxDrain + 10, 10}} {
+		body := strings.NewReader(strings.Repeat("x", tc.size))
+		req := httptest.NewRequest("POST", "/v1/unknown", body)
+		req.Header.Set("X-Client-Version", "android/0.2.5+41")
+		res := httptest.NewRecorder()
+		h.ServeHTTP(res, req)
+		if res.Code != 404 || body.Len() != tc.left {
+			t.Fatalf("%d-byte body: %d, %d bytes left", tc.size, res.Code, body.Len())
+		}
 	}
 }

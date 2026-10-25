@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -43,6 +44,8 @@ type API struct {
 	BodyLimit int64
 	// Streams bound concurrent SSE streams.
 	Streams rest.StreamLimits
+	// TrustedProxies are the networks whose X-Forwarded-For names the client address.
+	TrustedProxies []netip.Prefix
 }
 
 // Kubernetes are the prod identity files and endpoints; empty values take the
@@ -90,6 +93,7 @@ var Vars = []Var{
 	{"SSE_MAX_STREAMS", "2000", "Предел одновременных SSE-потоков процесса"},
 	{"SSE_MAX_STREAMS_PER_IP", "20", "Предел одновременных SSE-потоков с одного адреса клиента"},
 	{"SSE_BUSY_RETRY_AFTER", "10s", "Retry-After отказа 429 по пределу SSE-потоков; 1s–5m"},
+	{"TRUSTED_PROXIES", "", "CIDR доверенных прокси (nginx стенда, ingress) через запятую; только от них адрес клиента берётся из X-Forwarded-For; пусто — адрес TCP-пира"},
 }
 
 // Load reads and validates all settings. Invalid configuration prevents startup.
@@ -183,6 +187,17 @@ func loadAPI(env string, v map[string]string) (API, []error) {
 	api.Streams.RetryAfter, err = time.ParseDuration(v["SSE_BUSY_RETRY_AFTER"])
 	if err != nil || api.Streams.RetryAfter < time.Second || api.Streams.RetryAfter > 5*time.Minute {
 		errs = append(errs, errors.New("SSE_BUSY_RETRY_AFTER must be between 1s and 5m"))
+	}
+	for _, part := range strings.Split(v["TRUSTED_PROXIES"], ",") {
+		if part = strings.TrimSpace(part); part == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(part)
+		if err != nil {
+			errs = append(errs, errors.New("TRUSTED_PROXIES must be comma-separated CIDR networks"))
+			break
+		}
+		api.TrustedProxies = append(api.TrustedProxies, prefix.Masked())
 	}
 	if !api.Enabled {
 		return api, errs

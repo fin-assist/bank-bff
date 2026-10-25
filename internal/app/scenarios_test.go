@@ -21,6 +21,9 @@ var scenarios = map[string]func(*testing.T, starter){
 	"StreamLimit":           scenarioStreamLimit,
 	"ClientDisconnect":      scenarioClientDisconnect,
 	"StreamDeadlines":       scenarioStreamOutlivesUnaryTimeouts,
+	"ShutdownEndsStreams":   scenarioShutdownEndsStreams,
+	"OperationErrors":       scenarioOperationErrors,
+	"TrustedProxies":        scenarioTrustedProxies,
 }
 
 func TestIntegrationScenarios(t *testing.T) {

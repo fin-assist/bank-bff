@@ -87,8 +87,12 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Optio
 	if api != nil {
 		keys = api.refreshKeys
 	}
+	publicServer := server(public, log, o)
+	if api != nil {
+		publicServer.RegisterOnShutdown(api.streams.Shutdown)
+	}
 	return serve(ctx, cfg, log, readiness, keys,
-		boundServer{server(public, log, o), publicListener},
+		boundServer{publicServer, publicListener},
 		boundServer{server(ops.Handler(readiness, registry), log, o), operational})
 }
 

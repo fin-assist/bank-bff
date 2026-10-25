@@ -1,10 +1,8 @@
 package endpoint
 
 import (
-	"context"
 	"net/http"
 	"strconv"
-	"time"
 
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
@@ -208,16 +206,11 @@ func (c converter) answerEvent(m *assistantv1.WatchAnswerResponse) (name string,
 }
 
 func (d Deps) watchAnswer(c *rest.Call) {
-	release, ok := c.Streams.Acquire(rest.HintsFrom(c.R.Context()).ClientIP)
+	ctx, done, ok := openStream(c, orDefault(d.AnswerStream, AnswerStreamDeadline))
 	if !ok {
-		c.Metrics.StreamRejected(c.Op.Route.Path)
-		c.Streams.Busy(c.Clock()).Write(c.W)
 		return
 	}
-	defer release()
-	timeout := orDefault(d.AnswerStream, AnswerStreamDeadline)
-	ctx, cancel := context.WithTimeout(c.R.Context(), timeout)
-	defer cancel()
+	defer done()
 	stream, err := d.Assistant.WatchAnswer(ctx, &assistantv1.WatchAnswerRequest{AnswerId: c.R.PathValue("answer_id")})
 	if err != nil {
 		c.Fail(err)
@@ -230,7 +223,7 @@ func (d Deps) watchAnswer(c *rest.Call) {
 		c.Fail(err)
 		return
 	}
-	sse, err := rest.StartStream(c.W, time.Now().Add(timeout+streamWriteMargin))
+	sse, err := rest.StartStream(c.W)
 	if err != nil {
 		c.Log.WarnContext(ctx, "stream start failed")
 		return
@@ -248,5 +241,5 @@ func (d Deps) watchAnswer(c *rest.Call) {
 	}
 	// The generation does not depend on this stream: a client disconnect or a peer
 	// failure only closes it, without a terminal event (grpc-api.md 5.2).
-	_ = rest.Pump(ctx, stream.Recv, cancel, d.heartbeat(), sse.Ping, send)
+	_ = rest.Pump(ctx, stream.Recv, done, d.heartbeat(), sse.Ping, send)
 }

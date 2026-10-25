@@ -152,6 +152,12 @@ func scenarioAssistantUnary(t *testing.T, start starter) {
 		t.Fatalf("%d %s", r.StatusCode, r.body)
 	}
 	lastCall(t, b, assistantv1.AssistantService_AskQuestion_FullMethodName, access, idemKey)
+	// Members are decoded by their exact names, as the schema validated them: a
+	// differently cased duplicate cannot replace the validated text.
+	ask.body = `{"text":"valid","Text":"","TEXT":"x"}`
+	if r := b.do(t, ask); r.StatusCode != 201 || asked.GetText() != "valid" {
+		t.Fatalf("case-folded member: %d %q", r.StatusCode, asked.GetText())
+	}
 	for _, body := range []string{`{"text":""}`, `{"text":"` + strings.Repeat("я", 2001) + `"}`, `{"text":"x","transfer_mode":"sideways"}`, `{}`} {
 		ask.body = body
 		if r := b.do(t, ask); r.StatusCode != 400 || errorCode(r) != "VALIDATION_ERROR" {
@@ -243,7 +249,8 @@ func scenarioWatchAnswer(t *testing.T, start starter) {
 		}
 	})
 	route := "/v1/assistant/messages/{answer_id}/events"
-	resp, body := b.raw(t, request{method: "GET", path: "/v1/assistant/messages/a1/events", route: route, header: auth}) //nolint:bodyclose // raw reads and closes the body.
+	got := b.raw(t, request{method: "GET", path: "/v1/assistant/messages/a1/events", route: route, header: auth})
+	resp, body := got.Response, got.body
 	events, pings := b.contract.Events(t, "GET", route, strings.NewReader(string(body)))
 	names := []string{}
 	for _, e := range events {
@@ -254,7 +261,8 @@ func scenarioWatchAnswer(t *testing.T, start starter) {
 		t.Fatalf("%d %v %d", resp.StatusCode, names, pings)
 	}
 	lastCall(t, b, assistantv1.AssistantService_WatchAnswer_FullMethodName, access, "")
-	resp, body = b.raw(t, request{method: "GET", path: "/v1/assistant/messages/failed/events", route: route, header: auth}) //nolint:bodyclose // raw reads and closes the body.
+	got = b.raw(t, request{method: "GET", path: "/v1/assistant/messages/failed/events", route: route, header: auth})
+	resp, body = got.Response, got.body
 	events, _ = b.contract.Events(t, "GET", route, strings.NewReader(string(body)))
 	if resp.StatusCode != 200 || len(events) != 2 || events[1].Name != "error" || events[1].Data["code"] != "MODEL_ERROR" || events[1].Data["retryable"] != true ||
 		events[1].Data["user_message"] != events[1].Data["text"] || strings.Contains(string(body), "llm") {

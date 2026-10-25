@@ -85,8 +85,10 @@ func Validate(ctx context.Context, r *http.Request, op apispec.Operation, path m
 }
 
 func collect(err error, out *[]Detail) {
-	// A RequestError unwraps to its schema MultiError, so the top-level list is
-	// matched by type, not with errors.As, to keep the parameter of each element.
+	// A RequestError unwraps to its schema MultiError, and a MultiError matches its
+	// elements in errors.As, so neither can classify the error itself: the list is
+	// matched by its own type to walk it element by element, each element keeping
+	// its own parameter.
 	if multi, ok := err.(openapi3.MultiError); ok { //nolint:errorlint // errors.As would match the MultiError a RequestError unwraps to.
 		for _, e := range multi {
 			collect(e, out)
@@ -114,7 +116,7 @@ func collect(err error, out *[]Detail) {
 }
 
 func schemaErrors(err error, field string, inBody bool, out *[]Detail) {
-	if multi, ok := err.(openapi3.MultiError); ok { //nolint:errorlint // errors.As would match the MultiError a RequestError unwraps to.
+	if multi, ok := err.(openapi3.MultiError); ok { //nolint:errorlint // As in collect: the list itself, not a list an element wraps.
 		for _, e := range multi {
 			schemaErrors(e, field, inBody, out)
 		}

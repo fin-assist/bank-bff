@@ -50,9 +50,15 @@ func TestUnitFromGRPCTranslatesRegistryReasons(t *testing.T) {
 		{finerr.RateLimited(retry), 429, "RATE_LIMITED", func(e Error) bool { return e.RetryAt != "" && e.RetryAfter > 80*time.Second }},
 		{finerr.InternalError(), 500, "INTERNAL_ERROR", nil},
 		{fmt.Errorf("wrapped: %w", finerr.NotFound()), 404, "NOT_FOUND", nil},
-		{finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "phone", Reason: "INVALID_FORMAT", Description: "bad phone"}), 400, "VALIDATION_ERROR",
+		{finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "phone", Reason: "INVALID_FORMAT", Description: "+79001234567 is not valid"}), 400, "VALIDATION_ERROR",
 			func(e Error) bool {
-				return len(e.Details) == 1 && e.Details[0] == Detail{Field: "phone", Code: "INVALID_FORMAT", Message: "bad phone"}
+				// The service description never reaches the client: it may carry the input.
+				return len(e.Details) == 1 && e.Details[0] == Detail{Field: "phone", Code: "INVALID_FORMAT", Message: "has invalid format"}
+			}},
+		{finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "users.phone column; DROP", Reason: "pg_constraint_xyz", Description: "duplicate key"}), 400, "VALIDATION_ERROR",
+			func(e Error) bool {
+				// An unknown code becomes INVALID_FORMAT, an unshaped field is dropped.
+				return len(e.Details) == 1 && e.Details[0] == Detail{Code: "INVALID_FORMAT", Message: "has invalid format"}
 			}},
 		{finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "text", Reason: "OUT_OF_RANGE", Description: strings.Repeat("x", 300)}), 400, "VALIDATION_ERROR",
 			func(e Error) bool { return e.Details[0].Message == "is out of range" }},

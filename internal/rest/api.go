@@ -1,8 +1,10 @@
 package rest
 
 import (
+	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -63,6 +65,8 @@ type Config struct {
 	Streams      *StreamLimiter
 	Log          *slog.Logger
 	Clock        func() time.Time
+	// TrustedProxies are the proxies whose X-Forwarded-For names the client.
+	TrustedProxies []netip.Prefix
 }
 
 // Handler builds the public handler: request ID and access log for every path, the
@@ -86,6 +90,12 @@ func Handler(cfg Config, routes []Route) (http.Handler, error) {
 			refusal.Write(w)
 			return
 		}
+		// A GET pattern of ServeMux also matches HEAD, which the contract does not
+		// declare: answer it before routing, so it reaches no service and no stream slot.
+		if r.Method == http.MethodHead {
+			NotFound().Write(w)
+			return
+		}
 		h := HintsFrom(r.Context())
 		h.ClientVersion = r.Header.Get("X-Client-Version")
 		if rec, ok := w.(*recorder); ok {
@@ -96,7 +106,21 @@ func Handler(cfg Config, routes []Route) (http.Handler, error) {
 	root := http.NewServeMux()
 	root.Handle("/v1/", gated)
 	root.Handle("/", http.NotFoundHandler())
-	return RequestID(accessLog(cfg, root)), nil
+	return RequestID(cfg.TrustedProxies, accessLog(cfg, drainBody(root))), nil
+}
+
+// maxDrain bounds the unread request body discarded after an early answer (413, 401,
+// 404 before the body is read), as net/http does for keep-alive connections.
+const maxDrain = 256 << 10
+
+// drainBody discards a bounded rest of an unread request body before the answer is
+// sent. A client still writing its body would otherwise get a connection reset
+// instead of the 413 or 401 when the connection closes; a longer body still resets.
+func drainBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		_, _ = io.CopyN(io.Discard, r.Body, maxDrain)
+	})
 }
 
 func routeHandler(cfg Config, route Route, op apispec.Operation) http.Handler {

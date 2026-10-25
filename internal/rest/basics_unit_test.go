@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ import (
 func TestUnitRequestIDEchoesUUIDAndReplacesOthers(t *testing.T) {
 	var seen string
 	var hints Hints
-	h := RequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	h := RequestID(nil, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen, hints = reqctx.RequestID(r.Context()), HintsFrom(r.Context())
 	}))
 	const id = "0190c3a0-1b2c-7d3e-8f40-123456789abc"
@@ -51,6 +52,40 @@ func TestUnitRequestIDEchoesUUIDAndReplacesOthers(t *testing.T) {
 	}
 	if HintsFrom(context.Background()) != (Hints{}) {
 		t.Fatal("hints without a request")
+	}
+}
+
+func TestUnitClientIPTrustsOnlyConfiguredProxies(t *testing.T) {
+	proxies := []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("10.0.0.0/8")}
+	for _, tc := range []struct {
+		name, remote string
+		xff          []string
+		trusted      []netip.Prefix
+		want         string
+	}{
+		{"no proxies: the peer", "203.0.113.7:1", []string{"198.51.100.1"}, nil, "203.0.113.7"},
+		{"untrusted peer forges a header", "203.0.113.7:1", []string{"198.51.100.1"}, proxies, "203.0.113.7"},
+		{"trusted proxy", "127.0.0.1:1", []string{"198.51.100.1"}, proxies, "198.51.100.1"},
+		{"client-supplied prefix is ignored", "127.0.0.1:1", []string{"192.0.2.66, 198.51.100.1"}, proxies, "198.51.100.1"},
+		{"chain of proxies", "127.0.0.1:1", []string{"192.0.2.66, 198.51.100.1, 10.1.2.3", "10.0.0.9"}, proxies, "198.51.100.1"},
+		{"mapped IPv4", "[::ffff:127.0.0.1]:1", []string{"::ffff:198.51.100.1"}, proxies, "198.51.100.1"},
+		{"only proxies: the leftmost", "127.0.0.1:1", []string{"10.0.0.1, 10.0.0.2"}, proxies, "10.0.0.1"},
+		{"trusted proxy without a header", "127.0.0.1:1", nil, proxies, "127.0.0.1"},
+		{"malformed element", "127.0.0.1:1", []string{"198.51.100.1, unknown"}, proxies, "127.0.0.1"},
+		{"overlong chain", "127.0.0.1:1", []string{strings.TrimSuffix(strings.Repeat("198.51.100.1,", 17), ",")}, proxies, "127.0.0.1"},
+		{"unparsable peer", "bad", nil, proxies, ""},
+		{"named peer", "localhost:1", []string{"198.51.100.1"}, proxies, "localhost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/", nil)
+			r.RemoteAddr = tc.remote
+			for _, v := range tc.xff {
+				r.Header.Add("X-Forwarded-For", v)
+			}
+			if got := ClientIP(r, tc.trusted); got != tc.want {
+				t.Fatalf("%q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -120,7 +155,7 @@ func TestUnitVersionsCompareNumerically(t *testing.T) {
 		}
 	}
 	c, ok := ParseClient("ios_beta/10.20.30+999")
-	if !ok || c.Platform != "ios_beta" || c.Label() != "ios_beta/10.20" {
+	if !ok || c.Platform != "ios_beta" || c.Label() != "ios_beta" {
 		t.Fatalf("%+v %v", c, ok)
 	}
 	if !ValidPlatform("web") || ValidPlatform("Web") || ValidPlatform("") {
@@ -139,7 +174,7 @@ func TestUnitGatesOrderMaintenanceThenVersion(t *testing.T) {
 		c, e := g.Check(req)
 		return e, c
 	}
-	if e, c := check(g, "android/0.2.5+40"); e != nil || c.Label() != "android/0.2" {
+	if e, c := check(g, "android/0.2.5+40"); e != nil || c.Label() != "android" {
 		t.Fatalf("equal minimum passes: %+v", e)
 	}
 	if e, _ := check(g, "android/0.10.0+1"); e != nil {
@@ -251,8 +286,14 @@ func (f *flushRecorder) SetWriteDeadline(t time.Time) error {
 func TestUnitStreamWritesEventsAndExtendsDeadlines(t *testing.T) {
 	deadline := time.Now().Add(time.Hour)
 	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
-	s, err := StartStream(w, deadline)
-	if err != nil || !w.writeDeadln.Equal(deadline) || !w.readDeadline.Equal(deadline) || w.Header().Get("Content-Type") != "text/event-stream" || w.Code != 200 || !w.Flushed {
+	if err := ExtendDeadlines(w, deadline); err != nil || !w.writeDeadln.Equal(deadline) || !w.readDeadline.Equal(deadline) || w.Flushed || w.Body.Len() != 0 {
+		t.Fatalf("deadlines are extended without committing the answer: %v %+v", err, w)
+	}
+	if err := ExtendDeadlines(httptest.NewRecorder(), deadline); err != nil {
+		t.Fatalf("a writer without deadlines: %v", err)
+	}
+	s, err := StartStream(w)
+	if err != nil || w.Header().Get("Content-Type") != "text/event-stream" || w.Code != 200 || !w.Flushed {
 		t.Fatalf("%v %+v", err, w)
 	}
 	if err := s.Event("status", map[string]string{"status": "pending"}); err != nil {
@@ -272,9 +313,29 @@ func TestUnitStreamWritesEventsAndExtendsDeadlines(t *testing.T) {
 		t.Fatal("write errors are returned")
 	}
 	for _, which := range []string{"read", "write"} {
-		if _, err := StartStream(&flushRecorder{ResponseRecorder: httptest.NewRecorder(), failDeadline: which}, deadline); err == nil {
+		if err := ExtendDeadlines(&flushRecorder{ResponseRecorder: httptest.NewRecorder(), failDeadline: which}, deadline); err == nil {
 			t.Fatalf("%s deadline error ignored", which)
 		}
+	}
+}
+
+func TestUnitStreamLimiterShutdownStopsStreams(t *testing.T) {
+	l := NewStreamLimiter(StreamLimits{Max: 2, PerIP: 2})
+	ended := make(chan struct{})
+	stop := l.StopOnShutdown(func() { close(ended) })
+	detached := 0
+	other := l.StopOnShutdown(func() { detached++ })
+	if !other() {
+		t.Fatal("a finished stream detaches")
+	}
+	l.Shutdown()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not end the stream")
+	}
+	if stop() || detached != 0 {
+		t.Fatalf("stop after shutdown %v, detached stream called %d", stop(), detached)
 	}
 }
 

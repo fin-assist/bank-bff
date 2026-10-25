@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"regexp"
-	"unicode/utf8"
 
 	"github.com/fin-assist/contracts/gen/go/finerr"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -15,8 +14,8 @@ import (
 // reasonShape bounds reason labels to the registry naming rule (grpc-api.md 5.4).
 var reasonShape = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,61}[A-Z0-9]$`)
 
-// maxDetailMessage bounds a forwarded BadRequest description (diagnostics only).
-const maxDetailMessage = 200
+// fieldShape bounds a forwarded BadRequest field: a contract field path or header name.
+var fieldShape = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.\[\]-]{0,127}$`)
 
 // FromGRPC translates an internal call error by its ErrorInfo.reason (finerr.ToREST,
 // grpc-api.md 5). declared holds the statuses the operation declares in openapi.yaml.
@@ -39,12 +38,20 @@ func (m *Metrics) FromGRPC(err error, declared map[int]bool) Error {
 	}
 	e := Error{Status: r.Spec.HTTPStatus, Code: r.Code, RetryAfter: r.RetryAfter,
 		RetryAt: r.Metadata["retry_at"], ResetsAt: r.Metadata["resets_at"]}
+	// A service description may carry input or internal names: the client gets the
+	// BFF's own message for one of the three known codes, and a bounded field name.
 	for _, v := range r.Violations {
-		msg := v.GetDescription()
-		if utf8.RuneCountInString(msg) > maxDetailMessage || !utf8.ValidString(msg) || msg == "" {
-			msg = detailMessage(v.GetReason())
+		code := v.GetReason()
+		switch code {
+		case DetailRequired, DetailInvalidFormat, DetailOutOfRange:
+		default:
+			code = DetailInvalidFormat
 		}
-		e.Details = append(e.Details, Detail{Field: v.GetField(), Code: v.GetReason(), Message: msg})
+		field := v.GetField()
+		if !fieldShape.MatchString(field) {
+			field = ""
+		}
+		e.Details = append(e.Details, Detail{Field: field, Code: code, Message: detailMessage(code)})
 	}
 	return e
 }

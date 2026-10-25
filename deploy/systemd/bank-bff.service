@@ -1,6 +1,8 @@
 # Example for the stand; no database or migration command is needed. ENV=stage serves the
 # public API (FIN-268): the env file must set USER_GRPC_ADDR, ASSISTANT_GRPC_ADDR, AUTH_USER_ISSUER,
 # AUTH_USER_AUDIENCE, CLIENT_MIN_VERSIONS and the AUTH_STAGE_* files (docs/config.md), or start fails.
+# Behind the local nginx it should set TRUSTED_PROXIES=127.0.0.1/32 so that X-Forwarded-For of
+# that nginx gives the client address; without it every client has the nginx address.
 [Unit]
 Description=fin-assist bank-bff
 After=network-online.target

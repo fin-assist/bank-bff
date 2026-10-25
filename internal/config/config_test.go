@@ -21,7 +21,7 @@ func TestUnitDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("defaults: %+v %v", cfg, err)
 	}
 	a := cfg.API
-	if !a.Enabled || a.BodyLimit != 65536 || a.Maintenance.Enabled || a.Maintenance.RetryAfter != 5*time.Minute || a.Streams.Max != 2000 || a.Streams.PerIP != 20 ||
+	if !a.Enabled || a.TrustedProxies != nil || a.BodyLimit != 65536 || a.Maintenance.Enabled || a.Maintenance.RetryAfter != 5*time.Minute || a.Streams.Max != 2000 || a.Streams.PerIP != 20 ||
 		a.Streams.RetryAfter != 10*time.Second || a.MinVersions["android"] != (rest.Version{"0", "2", "5"}) || a.UserAddr != "dns:///user:9090" {
 		t.Fatalf("API defaults: %+v", a)
 	}
@@ -42,11 +42,12 @@ func TestUnitDefaultsAndOverrides(t *testing.T) {
 		"JSON_BODY_LIMIT": "1048576", "SSE_MAX_STREAMS": "5", "SSE_MAX_STREAMS_PER_IP": "5", "SSE_BUSY_RETRY_AFTER": "5m",
 		"CLIENT_MIN_VERSIONS": "android=0.10.0, ios=1.0.0", "SERVICE_TOKEN_FILE": "/t", "AUTH_KUBERNETES_ISSUER": "i", "AUTH_KUBERNETES_JWKS_URL": "u",
 		"AUTH_KUBERNETES_CA_FILE": "c", "AUTH_KUBERNETES_API_TOKEN_FILE": "a", "AUTH_KUBERNETES_NAMESPACE": "n", "AUTH_STAGE_ISSUER": "si",
-		"AUTH_STAGE_SIGNING_KEY_FILE": "sk", "AUTH_STAGE_PUBLIC_KEYS_FILE": "sp"}
+		"AUTH_STAGE_SIGNING_KEY_FILE": "sk", "AUTH_STAGE_PUBLIC_KEYS_FILE": "sp", "TRUSTED_PROXIES": "127.0.0.1/32, 10.1.2.3/8,,::1/128"}
 	cfg, err = load(func(k string) string { return values[k] })
 	a = cfg.API
 	if err != nil || a.Enabled || !a.Maintenance.Enabled || a.Maintenance.Until.IsZero() || a.Maintenance.RetryAfter != 30*time.Second || a.BodyLimit != 1<<20 ||
-		a.Streams.Max != 5 || a.MinVersions["ios"] != (rest.Version{"1", "0", "0"}) || a.Kubernetes != (Kubernetes{"/t", "i", "u", "c", "a", "n"}) || a.Stage != (Stage{"si", "sk", "sp"}) {
+		a.Streams.Max != 5 || a.MinVersions["ios"] != (rest.Version{"1", "0", "0"}) || a.Kubernetes != (Kubernetes{"/t", "i", "u", "c", "a", "n"}) || a.Stage != (Stage{"si", "sk", "sp"}) ||
+		fmt.Sprint(a.TrustedProxies) != "[127.0.0.1/32 10.0.0.0/8 ::1/128]" {
 		t.Fatalf("API overrides: %+v %v", a, err)
 	}
 }
@@ -81,6 +82,7 @@ func TestUnitInvalidSettings(t *testing.T) {
 		{"JSON_BODY_LIMIT", "16384"}, {"JSON_BODY_LIMIT", "2097152"}, {"JSON_BODY_LIMIT", "x"},
 		{"SSE_MAX_STREAMS", "0"}, {"SSE_MAX_STREAMS", "x"}, {"SSE_MAX_STREAMS_PER_IP", "0"}, {"SSE_MAX_STREAMS_PER_IP", "2001"},
 		{"SSE_BUSY_RETRY_AFTER", "500ms"}, {"SSE_BUSY_RETRY_AFTER", "6m"},
+		{"TRUSTED_PROXIES", "127.0.0.1"}, {"TRUSTED_PROXIES", "10.0.0.0/8,nginx"},
 	} {
 		t.Run(tc.key+tc.value, func(t *testing.T) {
 			_, err := load(func(key string) string {

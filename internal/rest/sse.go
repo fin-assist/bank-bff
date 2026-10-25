@@ -22,17 +22,33 @@ type StreamLimits struct {
 	RetryAfter time.Duration
 }
 
-// StreamLimiter counts open streams. It is safe for concurrent use.
+// StreamLimiter counts open streams and ends them on shutdown. It is safe for
+// concurrent use.
 type StreamLimiter struct {
 	mu     sync.Mutex
 	limits StreamLimits
 	total  int
 	perIP  map[string]int
+	// closing ends with Shutdown: open streams stop so the server drains promptly.
+	closing  context.Context
+	shutdown context.CancelFunc
 }
 
 // NewStreamLimiter returns a limiter with the given limits.
 func NewStreamLimiter(l StreamLimits) *StreamLimiter {
-	return &StreamLimiter{limits: l, perIP: make(map[string]int)}
+	closing, shutdown := context.WithCancel(context.Background())
+	return &StreamLimiter{limits: l, perIP: make(map[string]int), closing: closing, shutdown: shutdown}
+}
+
+// Shutdown ends every open stream without a terminal event (the client reconnects
+// and receives the current state first). It is registered with
+// http.Server.RegisterOnShutdown, so a graceful shutdown does not wait for streams
+// until its timeout.
+func (l *StreamLimiter) Shutdown() { l.shutdown() }
+
+// StopOnShutdown calls cancel when Shutdown is called; the returned stop detaches it.
+func (l *StreamLimiter) StopOnShutdown(cancel context.CancelFunc) (stop func() bool) {
+	return context.AfterFunc(l.closing, cancel)
 }
 
 // Acquire reserves a stream slot for ip; release must be called exactly once.
@@ -70,19 +86,26 @@ type Stream struct {
 	rc *http.ResponseController
 }
 
-// StartStream commits 200 text/event-stream. The listener's read and write timeouts
-// are for unary requests: the stream extends both to its own deadline, so neither the
-// server write timeout nor the read timeout cuts or cancels it earlier.
-func StartStream(w http.ResponseWriter, deadline time.Time) (*Stream, error) {
+// ExtendDeadlines moves the connection read and write deadlines to the stream's own
+// deadline. The listener timeouts are for unary requests; a stream calls this before
+// it waits for the first peer message, so neither the server write timeout nor the
+// read timeout cuts it or a late JSON refusal. Nothing is written.
+func ExtendDeadlines(w http.ResponseWriter, deadline time.Time) error {
 	rc := http.NewResponseController(w)
 	// A writer without connection deadlines (an in-process recorder) has no listener
 	// timeouts to extend.
 	if err := rc.SetWriteDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
-		return nil, fmt.Errorf("sse write deadline: %w", err)
+		return fmt.Errorf("sse write deadline: %w", err)
 	}
 	if err := rc.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
-		return nil, fmt.Errorf("sse read deadline: %w", err)
+		return fmt.Errorf("sse read deadline: %w", err)
 	}
+	return nil
+}
+
+// StartStream commits 200 text/event-stream; call ExtendDeadlines first.
+func StartStream(w http.ResponseWriter) (*Stream, error) {
+	rc := http.NewResponseController(w)
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-store")

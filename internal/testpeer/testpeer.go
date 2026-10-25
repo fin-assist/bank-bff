@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -23,10 +24,8 @@ import (
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
 	identity "github.com/fin-assist/go-identity"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -222,7 +221,7 @@ type signingKeys struct {
 
 func (s signingKeys) GetSigningKeys(context.Context, *userv1.GetSigningKeysRequest) (*userv1.GetSigningKeysResponse, error) {
 	if s.peers != nil && s.peers.KeysUnavailable.Load() {
-		return nil, status.Error(codes.Unavailable, "user is down") //nolint:forbidigo // A fake peer plays a bare transport failure.
+		return nil, errors.New("user is down") // no registry reason: a failed key fetch
 	}
 	return &userv1.GetSigningKeysResponse{JwksJson: s.keys.JWKS()}, nil
 }
