@@ -21,10 +21,14 @@ Environment=HTTP_ADDR=127.0.0.1:9091
 # drop-in can reset it. On the stand, as root, check both. This unit's effective config:
 #   systemctl show bank-bff -p IPAddressAllow -p IPAddressDeny
 # must print IPAddressAllow=127.0.0.0/8 ::1/128 (localhost) and IPAddressDeny=0.0.0.0/0 ::/0
-# (any), in any order. A probe pair on PUBLIC_ADDR, always on loopback, shows the host enforces:
+# (any), in any order. Parent slices are merged in, so also check:
+#   systemctl show bank-bff -p Slice                      # Slice=system.slice
+#   systemctl show system.slice -.slice -p IPAddressAllow # empty for both
+# A probe pair on PUBLIC_ADDR, always on loopback, shows the host enforces:
 #   systemd-run --wait -q curl -sS -o /dev/null -m 3 http://127.0.0.1:8080/
 # must succeed (a 404 still exits 0 without -f) and fail with -p IPAddressDeny=any added.
-# If the control probe fails, the pair proves nothing. Check the binding with `ss -ltn`.
+# If the control probe fails, the pair proves nothing; if the deny probe passes, eBPF is
+# missing or a slice allows the traffic. Check the binding with `ss -ltn`.
 # Future outgoing peer calls (gRPC services) need explicit IPAddressAllow entries.
 IPAddressAllow=localhost
 IPAddressDeny=any
