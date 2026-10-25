@@ -10,6 +10,15 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 UNIT = ROOT / "deploy" / "systemd" / "bank-bff.service"
+# Python strip()/splitlines() treat more characters as whitespace or line breaks than systemd
+# and YAML do (NBSP, form feed, NEL, ...), so the examples are restricted to plain ASCII.
+FOREIGN = re.compile(r"[^\t\n\x20-\x7e]")
+
+
+def ascii_only(text):
+    match = FOREIGN.search(text)
+    if match:
+        raise ValueError(f"unsupported character {match.group()!r} at offset {match.start()}")
 
 # Security-relevant [Service] directives: every assignment, in order, must be exactly this.
 # Each of them changes the process environment, the command or the IP firewall.
@@ -80,6 +89,7 @@ def service_directives(unit):
 
 def check_unit(unit):
     """Reject a unit whose [Service] section is not exactly the allowlisted one."""
+    ascii_only(unit)
     exact = {key: [] for key in EXACT_SERVICE}
     for key, value in service_directives(unit):
         if key in exact:
@@ -113,6 +123,7 @@ def indent(line):
 
 def parse_yaml(text):
     """Parse the tiny block-YAML subset used by compose.yaml; fail closed on the rest."""
+    ascii_only(text)
     lines = [line.rstrip() for line in text.splitlines()
              if line.strip() and not line.lstrip().startswith("#")]
     if any("\t" in line for line in lines):
@@ -236,6 +247,11 @@ class DeployExamplesTests(unittest.TestCase):
             unit + "[X-Extra]\nEnvironment=HTTP_ADDR=0.0.0.0:9091\n",
             "Environment=HTTP_ADDR=0.0.0.0:9091\n" + unit,
             unit + "# note \\\n[Service]\nUnsetEnvironment=HTTP_ADDR\nIPAddressDeny=\n",
+            service("Environment\u00a0=HTTP_ADDR=0.0.0.0:9091"),
+            service("IPAddressDeny\u00a0=any"),
+            unit.replace("Environment=HTTP_ADDR=127.0.0.1:9091\n",
+                         "#\x0cEnvironment=HTTP_ADDR=127.0.0.1:9091\n"),
+            unit.replace("IPAddressDeny=any\n", "IPAddressDeny=any\r\n"),
         ]:
             with self.subTest(mutated=mutated[-160:]):
                 self.assertNotEqual(mutated, unit)
@@ -254,6 +270,8 @@ class DeployExamplesTests(unittest.TestCase):
 
     def test_compose_is_the_only_compose_file(self):
         self.assertEqual(compose_files(ROOT), ["compose.yaml"])
+        self.assertFalse((ROOT / ".env").exists(),
+                         ".env can set COMPOSE_FILE and pull in other compose files")
 
     def test_compose_publishes_ports_only_on_loopback(self):
         entries = published_ports((ROOT / "compose.yaml").read_text())
@@ -287,7 +305,10 @@ class DeployExamplesTests(unittest.TestCase):
                         "include:\n  - other.yaml\n" + head,
                         head + "networks:\n  hostnet:\n    name: host\n",
                         head + "x-base: &base\n  image: x\n",
-                        "  " + head, ""]:
+                        "  " + head, "",
+                        head.replace("ports:", "ports\u00a0:"),
+                        head + "#\x0c  other:\n    ports:\n      - 9091:9091\n",
+                        head.replace("ports:\n", "ports:\u0085")]:
             with self.subTest(compose=compose):
                 with self.assertRaises(ValueError):
                     published_ports(compose)

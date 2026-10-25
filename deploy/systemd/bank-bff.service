@@ -18,8 +18,9 @@ Environment=HTTP_ADDR=127.0.0.1:9091
 # Defense in depth on top of the loopback binding: only loopback traffic is allowed.
 # Requires cgroup eBPF support (otherwise systemd warns once per boot and runs unfiltered) and a
 # drop-in can reset it. `systemctl show bank-bff -p IPAddressDeny` shows only the configuration;
-# check enforcement with `systemd-run --wait -p IPAddressDeny=any curl -m 3 http://1.1.1.1`
-# (must fail) and the binding with `ss -ltn` on the stand.
+# check enforcement with a loopback probe pair: `systemd-run --wait -q curl -sS -m 3
+# http://127.0.0.1:9091/healthz` must succeed and the same command with
+# `-p IPAddressDeny=any` must fail; check the binding with `ss -ltn` on the stand.
 # Future outgoing peer calls (gRPC services) need explicit IPAddressAllow entries.
 IPAddressAllow=localhost
 IPAddressDeny=any
