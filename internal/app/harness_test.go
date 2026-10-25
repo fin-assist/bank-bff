@@ -142,7 +142,17 @@ func (b *bff) do(t *testing.T, r request) response {
 // raw sends a real HTTP request and returns the answer with its body read and closed.
 func (b *bff) raw(t *testing.T, r request) response {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	got, err := b.fetch(t.Context(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// fetch is raw without t.Fatal, for requests sent from another goroutine: t.Fatal
+// there would stop only that goroutine and leave the test waiting.
+func (b *bff) fetch(ctx context.Context, r request) (response, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var body io.Reader
 	if r.body != "" {
@@ -150,7 +160,7 @@ func (b *bff) raw(t *testing.T, r request) response {
 	}
 	req, err := http.NewRequestWithContext(ctx, r.method, "http://"+b.public+r.path, body)
 	if err != nil {
-		t.Fatal(err)
+		return response{}, err
 	}
 	req.Header.Set("X-Client-Version", clientVersion)
 	if r.body != "" {
@@ -165,14 +175,27 @@ func (b *bff) raw(t *testing.T, r request) response {
 	}
 	resp, err := (&http.Client{Transport: &http.Transport{DisableKeepAlives: true}}).Do(req)
 	if err != nil {
-		t.Fatal(err)
+		return response{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatal(err)
+		return response{}, err
 	}
-	return response{Response: resp, body: data}
+	return response{Response: resp, body: data}, nil
+}
+
+// await fails the test when ch is not ready within 5 seconds.
+func await[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s: timed out", what)
+		var zero T
+		return zero
+	}
 }
 
 func errorCode(r response) string {

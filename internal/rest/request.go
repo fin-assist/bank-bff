@@ -77,50 +77,49 @@ func RequestID(trusted []netip.Prefix, next http.Handler) http.Handler {
 	})
 }
 
-// maxForwardedHops bounds the X-Forwarded-For chain that is examined.
+// maxForwardedHops bounds the X-Forwarded-For elements examined from the right.
 const maxForwardedHops = 16
 
 // ClientIP is the client address: the TCP peer, unless the peer is a trusted proxy.
-// Then X-Forwarded-For is read from the right, and the first address outside the
-// trusted networks is the client; every proxy appends the address it saw, so only
-// elements added by trusted proxies are believed. A missing, malformed or overlong
-// chain keeps the proxy address (never a client-chosen one); a chain of trusted
-// addresses only yields its leftmost element. Forwarding headers of an untrusted peer
-// are ignored.
+// Then X-Forwarded-For is walked from the right: every proxy appends the address it
+// saw, so only elements appended by trusted proxies are believed, and the first
+// address outside the trusted networks is the client. Everything left of it is
+// written by the client and never examined, so a malformed or long prefix cannot
+// change the result. If an element appended by trusted proxies cannot be parsed, or
+// more than 16 elements were examined, the address of the last trusted hop is kept.
+// Forwarding headers of an untrusted peer are ignored.
 func ClientIP(r *http.Request, trusted []netip.Prefix) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return ""
 	}
-	peer, err := netip.ParseAddr(host)
+	hop, err := netip.ParseAddr(host)
 	if err != nil {
 		return host
 	}
-	peer = peer.Unmap()
-	if !isTrusted(peer, trusted) {
-		return peer.String()
+	hop = hop.Unmap()
+	if !isTrusted(hop, trusted) {
+		return hop.String()
 	}
-	var chain []string
-	for _, header := range r.Header.Values("X-Forwarded-For") {
-		chain = append(chain, strings.Split(header, ",")...)
-	}
-	if len(chain) == 0 || len(chain) > maxForwardedHops {
-		return peer.String()
-	}
-	addrs := make([]netip.Addr, 0, len(chain))
-	for _, element := range chain {
-		addr, err := netip.ParseAddr(strings.TrimSpace(element))
-		if err != nil {
-			return peer.String()
-		}
-		addrs = append(addrs, addr.Unmap())
-	}
-	for i := len(addrs) - 1; i >= 0; i-- {
-		if !isTrusted(addrs[i], trusted) {
-			return addrs[i].String()
+	examined := 0
+	values := r.Header.Values("X-Forwarded-For")
+	for i := len(values) - 1; i >= 0; i-- {
+		elements := strings.Split(values[i], ",")
+		for j := len(elements) - 1; j >= 0; j-- {
+			if examined++; examined > maxForwardedHops {
+				return hop.String()
+			}
+			addr, err := netip.ParseAddr(strings.TrimSpace(elements[j]))
+			if err != nil {
+				return hop.String()
+			}
+			hop = addr.Unmap()
+			if !isTrusted(hop, trusted) {
+				return hop.String()
+			}
 		}
 	}
-	return addrs[0].String()
+	return hop.String()
 }
 
 func isTrusted(addr netip.Addr, trusted []netip.Prefix) bool {

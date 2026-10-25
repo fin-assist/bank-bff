@@ -74,7 +74,7 @@ func scenarioGates(t *testing.T, start starter) {
 	}
 	for _, path := range []string{"/", "/healthz", "/readyz", "/metrics"} {
 		if got := b.raw(t, request{method: "GET", path: path}); got.StatusCode != 404 {
-			t.Fatalf("public %s: %d", path, resp.StatusCode)
+			t.Fatalf("public %s: %d", path, got.StatusCode)
 		}
 	}
 }
@@ -117,13 +117,21 @@ func scenarioStreamLimit(t *testing.T, start starter) {
 			return s.Send(&userv1.WatchPhoneVerificationResponse{Status: userv1.VerificationStatus_VERIFICATION_STATUS_EXPIRED})
 		}
 	})
-	first := make(chan []byte)
+	first := make(chan []byte, 1)
 	go func() {
-		got := b.raw(t, request{method: "GET", path: "/v1/auth/phone/events", header: base(map[string]string{"X-Verification-Token": "vt"})})
-		body := got.body
-		first <- body
+		got, err := b.fetch(t.Context(), request{method: "GET", path: "/v1/auth/phone/events", header: base(map[string]string{"X-Verification-Token": "vt"})})
+		if err != nil {
+			t.Error(err)
+		}
+		first <- got.body
 	}()
-	<-opened
+	select {
+	case <-opened:
+	case body := <-first:
+		t.Fatalf("the first stream was refused: %s", body)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first stream was not opened")
+	}
 	r := b.do(t, request{method: "GET", path: "/v1/assistant/messages/a1/events", route: "/v1/assistant/messages/{answer_id}/events",
 		header: base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})})
 	if r.StatusCode != 429 || errorCode(r) != "RATE_LIMITED" || r.Header.Get("Retry-After") != "7" || r.json["error"].(map[string]any)["retry_at"] == nil {
@@ -133,7 +141,7 @@ func scenarioStreamLimit(t *testing.T, start starter) {
 		t.Fatal("a refused stream reached the service")
 	}
 	close(release)
-	if events, _ := b.contract.Events(t, "GET", "/v1/auth/phone/events", strings.NewReader(string(<-first))); len(events) != 2 || events[1].Data["status"] != "expired" {
+	if events, _ := b.contract.Events(t, "GET", "/v1/auth/phone/events", strings.NewReader(string(await(t, first, "first stream")))); len(events) != 2 || events[1].Data["status"] != "expired" {
 		t.Fatalf("%v", events)
 	}
 }
@@ -320,6 +328,18 @@ func scenarioTrustedProxies(t *testing.T, start starter) {
 	if ip := calls[len(calls)-1].MD.Get("x-client-ip"); len(ip) != 1 || ip[0] != "198.51.100.1" {
 		t.Fatalf("client behind a proxy chain: %v", ip)
 	}
+	// A malformed or long prefix written by the client does not move it into the
+	// proxy's bucket: only the elements appended by the trusted proxies are examined.
+	for _, xff := range []string{"unknown, 198.51.100.7", strings.Repeat("junk, ", 16) + "198.51.100.7"} {
+		profile.header["X-Forwarded-For"] = xff
+		if r := b.do(t, profile); r.StatusCode != 200 {
+			t.Fatalf("%d %s", r.StatusCode, r.body)
+		}
+		calls = b.peers.Calls(userv1.ProfileService_GetProfile_FullMethodName)
+		if ip := calls[len(calls)-1].MD.Get("x-client-ip"); len(ip) != 1 || ip[0] != "198.51.100.7" {
+			t.Fatalf("%q: %v", xff, ip)
+		}
+	}
 	// Two clients behind the same proxy hold one stream each; a second stream of the
 	// first client is over its per-address limit.
 	opened, release := make(chan struct{}, 2), make(chan struct{})
@@ -337,13 +357,24 @@ func scenarioTrustedProxies(t *testing.T, start starter) {
 	}
 	done := make(chan struct{}, 2)
 	for _, client := range []string{"198.51.100.1", "198.51.100.2"} {
-		go func() { b.raw(t, watch(client)); done <- struct{}{} }()
-		<-opened
+		go func() {
+			if got, err := b.fetch(t.Context(), watch(client)); err != nil || got.StatusCode != 200 {
+				t.Errorf("stream of %s: %v %d %s", client, err, got.StatusCode, got.body)
+			}
+			done <- struct{}{}
+		}()
+		select {
+		case <-opened:
+		case <-done:
+			t.Fatalf("stream of %s was refused", client)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("stream of %s was not opened", client)
+		}
 	}
 	if r := b.do(t, watch("198.51.100.1")); r.StatusCode != 429 || errorCode(r) != "RATE_LIMITED" {
 		t.Fatalf("second stream of one client: %d %s", r.StatusCode, r.body)
 	}
 	close(release)
-	<-done
-	<-done
+	await(t, done, "first stream")
+	await(t, done, "second stream")
 }

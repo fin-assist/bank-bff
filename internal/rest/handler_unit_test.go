@@ -250,9 +250,13 @@ func TestUnitHandlerDrainsABoundedUnreadBody(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		size, left int
-	}{{1000, 0}, {maxDrain + 10, 10}} {
+		chunked    bool
+	}{{1000, 0, false}, {maxDrain + 10, maxDrain + 10, false}, {maxDrain + 10, 10, true}} {
 		body := strings.NewReader(strings.Repeat("x", tc.size))
 		req := httptest.NewRequest("POST", "/v1/unknown", body)
+		if tc.chunked {
+			req.ContentLength = -1
+		}
 		req.Header.Set("X-Client-Version", "android/0.2.5+41")
 		res := httptest.NewRecorder()
 		h.ServeHTTP(res, req)

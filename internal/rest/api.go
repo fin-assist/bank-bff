@@ -114,12 +114,17 @@ func Handler(cfg Config, routes []Route) (http.Handler, error) {
 const maxDrain = 256 << 10
 
 // drainBody discards a bounded rest of an unread request body before the answer is
-// sent. A client still writing its body would otherwise get a connection reset
-// instead of the 413 or 401 when the connection closes; a longer body still resets.
+// sent. net/http does the same for keep-alive connections, but not when the
+// connection closes after the reply (Connection: close, HTTP/1.0): a client still
+// writing its body would get a reset instead of the 413 or 401. A declared body
+// above the bound resets anyway, so it is not read at all; a chunked body
+// (ContentLength -1) is discarded within the bound.
 func drainBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
-		_, _ = io.CopyN(io.Discard, r.Body, maxDrain)
+		if r.ContentLength <= maxDrain {
+			_, _ = io.CopyN(io.Discard, r.Body, maxDrain)
+		}
 	})
 }
 
