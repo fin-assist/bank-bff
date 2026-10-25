@@ -36,11 +36,14 @@ def logical_lines(unit):
     """Join continuation lines as systemd.syntax(7) does.
 
     A line ending in an odd number of backslashes continues on the next line (the
-    backslash becomes a space); comment lines inside a continuation are skipped.
+    backslash becomes a space); comment lines are skipped everywhere, including inside
+    a continuation, and a comment ending in a backslash does not continue.
     """
     result, pending = [], None
     for line in unit.splitlines():
-        if pending is not None and line.lstrip().startswith(("#", ";")):
+        # A comment line is dropped whole, even inside a continuation, and a trailing
+        # backslash never makes it continue.
+        if line.lstrip().startswith(("#", ";")):
             continue
         trailing = len(line) - len(line.rstrip("\\"))
         if trailing % 2:
@@ -232,6 +235,7 @@ class DeployExamplesTests(unittest.TestCase):
             unit.replace("IPAddressDeny=any\n", "Nice=0 \\\n# swallowed comment\nIPAddressDeny=any\n"),
             unit + "[X-Extra]\nEnvironment=HTTP_ADDR=0.0.0.0:9091\n",
             "Environment=HTTP_ADDR=0.0.0.0:9091\n" + unit,
+            unit + "# note \\\n[Service]\nUnsetEnvironment=HTTP_ADDR\nIPAddressDeny=\n",
         ]:
             with self.subTest(mutated=mutated[-160:]):
                 self.assertNotEqual(mutated, unit)
@@ -246,6 +250,7 @@ class DeployExamplesTests(unittest.TestCase):
         # An even number of trailing backslashes does not continue the line.
         self.assertEqual(logical_lines("A=1 \\\\\nB=2\n"), ["A=1 \\\\", "B=2"])
         self.assertEqual(logical_lines("A=1 \\\n; note\nB=2\n"), ["A=1  B=2"])
+        self.assertEqual(logical_lines("# note \\\n[Service]\n"), ["[Service]"])
 
     def test_compose_is_the_only_compose_file(self):
         self.assertEqual(compose_files(ROOT), ["compose.yaml"])
