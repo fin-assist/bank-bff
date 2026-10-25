@@ -18,11 +18,12 @@ Environment=PUBLIC_ADDR=127.0.0.1:8080
 Environment=HTTP_ADDR=127.0.0.1:9091
 # Defense in depth on top of the loopback binding: only loopback traffic is allowed.
 # Requires cgroup eBPF support (otherwise systemd warns once per boot and runs unfiltered) and a
-# drop-in can reset it. `systemctl show bank-bff -p IPAddressDeny` shows only the configuration;
-# check enforcement with a probe pair on PUBLIC_ADDR, which is always on loopback:
+# drop-in can reset it. On the stand, as root, check both: `systemctl show bank-bff
+# -p IPAddressAllow -p IPAddressDeny` shows localhost and any (this unit's effective config),
+# and a probe pair on PUBLIC_ADDR, always on loopback, shows the host enforces filters:
 # `systemd-run --wait -q curl -sS -o /dev/null -m 3 http://127.0.0.1:8080/` must succeed
-# (a 404 still exits 0 without -f) and the same command with `-p IPAddressDeny=any` must fail;
-# check the binding with `ss -ltn` on the stand.
+# (a 404 still exits 0 without -f) and the same command with `-p IPAddressDeny=any` must fail.
+# If the control probe fails, the pair proves nothing. Check the binding with `ss -ltn`.
 # Future outgoing peer calls (gRPC services) need explicit IPAddressAllow entries.
 IPAddressAllow=localhost
 IPAddressDeny=any
