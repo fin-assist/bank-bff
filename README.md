@@ -28,3 +28,5 @@ make cover  # >=80% всего production-модуля отдельно unit/int
 [CHANGELOG.md](CHANGELOG.md), [docs/releasing.md](docs/releasing.md), `.github/workflows/release.yml` определяют выпуск сервиса. Тег ставит владелец после PR и post-merge CI; publication GHCR/deployment — отдельные этапы. Например, `make release-check VERSION=vX.Y.Z` проверяет подготовленную секцию до создания тега.
 
 Ревью Claude можно запускать после появления `.github/workflows/claude.yml` в main и настройки секрета владельцем. Настройка Renovate/controller, секретов и защит не входит в FIN-261; автоматически включённой политики обновлений каркас не заявляет.
+
+Для Python regression-тестов workflow нужен Node.js 20+ (`node` в PATH). Проверяется реальный read-only JS gate: fork/удалённый head/чужая base/закрытый PR/ошибка API не могут включить write-enabled job; отдельные issues не запускают ревью.

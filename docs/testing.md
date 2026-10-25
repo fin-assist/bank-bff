@@ -11,3 +11,5 @@ FIN-261 переносит инфраструктуру HTTP BFF из go-service
 PostgreSQL и testcontainers каркасу без БД не нужны; интеграционные тесты используют настоящий TCP/HTTP. При появлении stateful зависимости тесты должны использовать её настоящую реализацию. UI-тесты не входят в эту задачу.
 
 CI также запускает lint и сборку distroless/nonroot образа с HTTP smoke-проверкой обоих портов и SIGTERM. Версии инструментов — Makefile и workflow; toolchain — `go.mod`. Публикация GHCR/deploy и версия сервиса выполняются отдельно.
+
+Для Python regression-тестов workflow нужен Node.js 20+ (`node` в PATH). Проверяется реальный read-only JS gate: fork/удалённый head/чужая base/закрытый PR/ошибка API не могут включить write-enabled job; отдельные issues не запускают ревью.

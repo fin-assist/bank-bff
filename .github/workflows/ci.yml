@@ -39,6 +39,9 @@ jobs:
         run: go vet ./...
       - name: All tests belong to a suite
         run: make test-names
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Test the scripts
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: CHANGELOG.md format

@@ -41,6 +41,8 @@ Add an infrastructure dependency only for a real endpoint/usecase; no dummy code
 - Bind both listeners before readiness. On failure release the other listener. Drain on SIGTERM,
   bound shutdown and close active connections after timeout. Readiness drops before shutdown.
 - CI untrusted input never becomes shell code; fork PRs have no comment write permissions.
+  Claude first resolves the live PR in a read-only job without checkout/secrets; only an open
+  same-repository head/base enables the write job. Standalone issues and API errors fail closed.
 
 ## SQL construction in Go
 
@@ -72,7 +74,8 @@ PostgreSQL18 for integration/API tests and must not turn missing dependencies in
 
 Branch from fetched main, PR to main. Titles/descriptions are Russian and reference the FIN issue.
 Run make test, make lint and independent make cover gates with a process timeout. Toolchain comes
-from go.mod; GOTOOLCHAIN=auto downloads it. No UI test execution is authorized.
+from go.mod; GOTOOLCHAIN=auto downloads it. Python workflow tests require Node.js20+ in PATH.
+No UI test execution is authorized.
 Before review, make separate Security and Tests passes. Request in Russian:
 
 @codex @claude проведите ревью этого PR по Code Review Rules в AGENTS.md, включая Security и Tests.
