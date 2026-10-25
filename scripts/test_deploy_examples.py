@@ -242,8 +242,12 @@ class DeployExamplesTests(unittest.TestCase):
             service("ExecStartPre=/bin/true"),
             service("PassEnvironment=HTTP_ADDR"),
             moved,
-            unit.replace("Environment=HTTP_ADDR=", "Nice=0 \\\nEnvironment=HTTP_ADDR="),
-            unit.replace("IPAddressDeny=any\n", "Nice=0 \\\n# swallowed comment\nIPAddressDeny=any\n"),
+            # An allowlisted directive before the continuation: without continuation handling
+            # these would pass, so they test the joining itself.
+            unit.replace("Environment=HTTP_ADDR=", "RestartSec=2s \\\nEnvironment=HTTP_ADDR="),
+            unit.replace("IPAddressDeny=any\n", "RestartSec=2s \\\n# swallowed comment\nIPAddressDeny=any\n"),
+            unit.replace("RestartSec=2s\n",
+                         "RestartSec=2s \\\n\xa0# c\nUnsetEnvironment=HTTP_ADDR PUBLIC_ADDR\n"),
             unit + "[X-Extra]\nEnvironment=HTTP_ADDR=0.0.0.0:9091\n",
             "Environment=HTTP_ADDR=0.0.0.0:9091\n" + unit,
             unit + "# note \\\n[Service]\nUnsetEnvironment=HTTP_ADDR\nIPAddressDeny=\n",

@@ -11,6 +11,7 @@ EnvironmentFile=/etc/finassist/bank-bff/env
 Environment=ENV=stage
 # Both listeners stay on loopback: public traffic arrives only through the local nginx with TLS,
 # the operational port (/metrics, /readyz, /healthz) is never reachable from outside the host.
+# A remote monitoring exception changes this unit (see docs/config.md) and this comment.
 # The addresses belong to this unit: EnvironmentFile overrides Environment, so the env file
 # must not set PUBLIC_ADDR or HTTP_ADDR.
 Environment=PUBLIC_ADDR=127.0.0.1:8080
