@@ -9,6 +9,10 @@ Type=exec
 ExecStart=/opt/finassist/bank-bff/bank-bff serve
 EnvironmentFile=/etc/finassist/bank-bff/env
 Environment=ENV=stage
+# Both listeners stay on loopback: public traffic arrives only through the local nginx with TLS,
+# the operational port (/metrics, /readyz, /healthz) is never reachable from outside the host.
+Environment=PUBLIC_ADDR=127.0.0.1:8080
+Environment=HTTP_ADDR=127.0.0.1:9091
 DynamicUser=yes
 Restart=on-failure
 RestartSec=2s
