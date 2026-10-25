@@ -1,0 +1,34 @@
+# Example for the stand; no database or migration command is needed.
+[Unit]
+Description=fin-assist bank-bff
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/opt/finassist/bank-bff/bank-bff serve
+EnvironmentFile=/etc/finassist/bank-bff/env
+Environment=ENV=stage
+DynamicUser=yes
+Restart=on-failure
+RestartSec=2s
+# Default shutdown delay + timeout is 25s.
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
