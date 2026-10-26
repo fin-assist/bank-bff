@@ -13,6 +13,7 @@ import (
 	"time"
 
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
+	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
 	"google.golang.org/grpc"
 
@@ -25,6 +26,12 @@ func scenarioGates(t *testing.T, start starter) {
 	b := start(t, nil)
 	access := b.keys.Access("u1")
 	routes := []request{
+		{method: "GET", path: "/v1/statements/config", route: "/v1/statements/config"},
+		{method: "POST", path: "/v1/statements", route: "/v1/statements"},
+		{method: "GET", path: "/v1/statements", route: "/v1/statements"},
+		{method: "GET", path: "/v1/statements/u1/progress", route: "/v1/statements/{upload_id}/progress"},
+		{method: "DELETE", path: "/v1/statements/u1", route: "/v1/statements/{upload_id}"},
+		{method: "GET", path: "/v1/statements/unread-lines?upload_id=u1", route: "/v1/statements/unread-lines"},
 		{method: "POST", path: "/v1/auth/phone", route: "/v1/auth/phone", body: `{"phone":"+79001234567"}`},
 		{method: "GET", path: "/v1/auth/phone/events", route: "/v1/auth/phone/events"},
 		{method: "GET", path: "/v1/profile", route: "/v1/profile"},
@@ -61,7 +68,7 @@ func scenarioGates(t *testing.T, start starter) {
 		}
 	}
 	// Other paths: JSON 404 inside /v1, plain 404 outside, no operational endpoint.
-	for _, path := range []string{"/v1/unknown", "/v1/profile/extra", "/v1/statements"} {
+	for _, path := range []string{"/v1/unknown", "/v1/profile/extra", "/v1/operations"} {
 		got := b.raw(t, request{method: "GET", path: path, header: base(nil)})
 		resp, body := got.Response, got.body
 		if resp.StatusCode != 404 || !strings.Contains(string(body), `"code":"NOT_FOUND"`) || resp.Header.Get("X-Request-Id") == "" {
@@ -86,6 +93,12 @@ func scenarioMaintenance(t *testing.T, start starter) {
 		c.API.Maintenance = rest.Maintenance{Enabled: true, Until: until, RetryAfter: time.Minute}
 	})
 	for _, r := range []request{
+		{method: "GET", path: "/v1/statements/config", route: "/v1/statements/config"},
+		{method: "POST", path: "/v1/statements", route: "/v1/statements"},
+		{method: "GET", path: "/v1/statements", route: "/v1/statements"},
+		{method: "GET", path: "/v1/statements/u1/progress", route: "/v1/statements/{upload_id}/progress"},
+		{method: "DELETE", path: "/v1/statements/u1", route: "/v1/statements/{upload_id}"},
+		{method: "GET", path: "/v1/statements/unread-lines?upload_id=u1", route: "/v1/statements/unread-lines"},
 		{method: "POST", path: "/v1/auth/phone", route: "/v1/auth/phone", body: `{"phone":"+79001234567"}`},
 		{method: "GET", path: "/v1/profile", route: "/v1/profile"},
 		{method: "GET", path: "/v1/assistant/messages/a1/events", route: "/v1/assistant/messages/{answer_id}/events"},
@@ -139,6 +152,7 @@ func scenarioStreamLimit(t *testing.T, start starter) {
 		t.Fatal("the first stream was not opened")
 	}
 	requests := []request{
+		{method: "GET", path: "/v1/statements/u1/progress", route: "/v1/statements/{upload_id}/progress", header: base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})},
 		{method: "GET", path: "/v1/assistant/messages/a1/events", route: "/v1/assistant/messages/{answer_id}/events",
 			header: base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})},
 		{method: "GET", path: "/v1/auth/phone/events", route: "/v1/auth/phone/events", header: base(map[string]string{"X-Verification-Token": "vt"})},
@@ -156,6 +170,14 @@ func scenarioStreamLimit(t *testing.T, start starter) {
 	if events, _ := b.contract.Events(t, "GET", "/v1/auth/phone/events", strings.NewReader(string(await(t, first, "first stream")))); len(events) != 2 || events[1].Data["status"] != "expired" {
 		t.Fatalf("%v", events)
 	}
+	b.peers.Statements.Set(func(s *testpeer.Statements) {
+		s.WatchFunc = func(_ *statementdatav1.WatchUploadRequest, stream grpc.ServerStreamingServer[statementdatav1.WatchUploadResponse]) error {
+			if err := stream.Send(&statementdatav1.WatchUploadResponse{Event: &statementdatav1.WatchUploadResponse_Progress{Progress: &statementdatav1.ImportProgress{Stage: 1, Percent: 1}}}); err != nil {
+				return err
+			}
+			return stream.Send(&statementdatav1.WatchUploadResponse{Event: &statementdatav1.WatchUploadResponse_Complete{Complete: importResultFixture()}})
+		}
+	})
 	// Capacity is free again: the same GETs can open successfully. The published
 	// wait remains client advice, not a server reservation of the stream slot.
 	b.peers.Assistant.Set(func(a *testpeer.Assistant) {

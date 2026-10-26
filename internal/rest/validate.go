@@ -172,3 +172,39 @@ func dedupe(in []Detail) []Detail {
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Field < out[j].Field })
 	return out
 }
+
+// ValidateInput is a route's input validation strategy. It may leave the request
+// body unread for a streaming handler. Refusals precede validation details.
+type ValidateInput func(*http.Request, apispec.Operation, map[string]string, int64) ([]byte, []Detail, *Error)
+
+// JSONInput is the existing bounded JSON request pipeline.
+func JSONInput(r *http.Request, op apispec.Operation, path map[string]string, limit int64) ([]byte, []Detail, *Error) {
+	body, refusal := ReadBody(r, op, limit)
+	if refusal != nil {
+		return nil, nil, refusal
+	}
+	return body, Validate(r.Context(), r, op, path, body), nil
+}
+
+// StreamingInput validates only parameters and headers. The owning endpoint must
+// validate its entire bounded body before completing the downstream operation.
+func StreamingInput(r *http.Request, op apispec.Operation, path map[string]string, _ int64) ([]byte, []Detail, *Error) {
+	options := *validationOptions
+	options.ExcludeRequestBody = true
+	// kin-openapi 0.133 security validation reads the entire body even with the
+	// no-op authenticator. Identity already ran; give schema checks an empty body
+	// while retaining the original headers/path/query and the real stream untouched.
+	clone := r.Clone(r.Context())
+	clone.Body = http.NoBody
+	clone.ContentLength = 0
+	clone.GetBody = nil
+	err := openapi3filter.ValidateRequest(r.Context(), &openapi3filter.RequestValidationInput{
+		Request: clone, PathParams: path, Route: op.Route, Options: &options,
+	})
+	if err == nil {
+		return nil, nil, nil
+	}
+	var details []Detail
+	collect(err, &details)
+	return nil, dedupe(details), nil
+}

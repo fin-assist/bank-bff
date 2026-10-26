@@ -55,7 +55,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		}, []string{"route"}),
 		rejected: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "finassist_sse_rejected_total",
-			Help: "SSE streams refused by the BFF concurrency limits, by route pattern.",
+			Help: "Streaming requests refused by the BFF concurrency limits, by route pattern.",
 		}, []string{"route"}),
 		clients: newBoundedLabels(32),
 		reasons: newBoundedLabels(32),
@@ -115,7 +115,7 @@ func (b *boundedLabels) value(v string) string {
 	return v
 }
 
-// StreamRejected counts a stream refused by the concurrency limits.
+// StreamRejected counts a streaming request refused by its concurrency budget.
 func (m *Metrics) StreamRejected(route string) {
 	if m != nil {
 		m.rejected.WithLabelValues(route).Inc()

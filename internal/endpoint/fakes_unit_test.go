@@ -155,10 +155,11 @@ func (f *fakes) GetLimit(ctx context.Context, _ *assistantv1.GetLimitRequest, _ 
 // unitAPI serves the routes with a header-checking stand-in for identity: no
 // network, the handlers and the whole rest pipeline in process.
 type unitAPI struct {
-	h       http.Handler
-	metrics *rest.Metrics
-	reg     *prometheus.Registry
-	f       *fakes
+	h          http.Handler
+	metrics    *rest.Metrics
+	reg        *prometheus.Registry
+	f          *fakes
+	statements *statementFakes
 }
 
 const (
@@ -181,9 +182,10 @@ func newUnitAPI(t *testing.T, streams rest.StreamLimits) *unitAPI {
 		streams = rest.StreamLimits{Max: 10, PerIP: 10, RetryAfter: time.Second}
 	}
 	f := &fakes{t: t}
-	deps := Deps{Auth: f, Consents: f, Profile: f, Assistant: f, Heartbeat: time.Millisecond, AnswerStream: time.Second, PhoneStream: time.Second}
+	sf := &statementFakes{}
+	deps := Deps{Auth: f, Consents: f, Profile: f, Assistant: f, Statements: sf, Heartbeat: time.Millisecond, AnswerStream: time.Second, PhoneStream: time.Second}
 	h, err := rest.Handler(rest.Config{Spec: spec, BodyLimit: rest.MinBodyLimit, Metrics: metrics, Log: slog.New(slog.DiscardHandler), Clock: time.Now,
-		Streams: rest.NewStreamLimiter(streams), Gates: rest.Gates{MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}}, Clock: time.Now},
+		Streams: rest.NewStreamLimiter(streams), Uploads: rest.NewStreamLimiter(rest.StreamLimits{Max: 16, PerIP: 2, RetryAfter: time.Second}), Gates: rest.Gates{MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}}, Clock: time.Now},
 		Authenticate: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != goodToken {
@@ -196,7 +198,7 @@ func newUnitAPI(t *testing.T, streams rest.StreamLimits) *unitAPI {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &unitAPI{h: h, metrics: metrics, reg: reg, f: f}
+	return &unitAPI{h: h, metrics: metrics, reg: reg, f: f, statements: sf}
 }
 
 type result struct {

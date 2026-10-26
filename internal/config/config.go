@@ -29,8 +29,8 @@ type API struct {
 	// Enabled is true in stage and prod. ENV=dev serves no business route: the
 	// identity assembly refuses dev, and there is no development bypass.
 	Enabled bool
-	// UserAddr and AssistantAddr are the gRPC targets of the peers.
-	UserAddr, AssistantAddr string
+	// UserAddr, AssistantAddr and StatementsAddr are the gRPC targets of the peers.
+	UserAddr, AssistantAddr, StatementsAddr string
 	// UserIssuer and UserAudience pin user access JWTs.
 	UserIssuer, UserAudience string
 	// Kubernetes is the prod service identity; Stage the stage one.
@@ -44,6 +44,8 @@ type API struct {
 	BodyLimit int64
 	// Streams bound concurrent SSE streams.
 	Streams rest.StreamLimits
+	// Uploads bounds long POST requests independently from SSE.
+	Uploads rest.StreamLimits
 	// TrustedProxies are the networks whose X-Forwarded-For names the client address.
 	TrustedProxies []netip.Prefix
 }
@@ -74,6 +76,7 @@ var Vars = []Var{
 	{"SHUTDOWN_TIMEOUT", "20s", "Общий предел graceful shutdown обоих listeners"},
 	{"USER_GRPC_ADDR", "", "gRPC-адрес сервиса user (`dns:///user.finassist.svc.cluster.local:9090`); обязателен в stage/prod"},
 	{"ASSISTANT_GRPC_ADDR", "", "gRPC-адрес сервиса assistant; обязателен в stage/prod"},
+	{"STATEMENTS_GRPC_ADDR", "", "gRPC-адрес bank-statement-data для шести RPC импорта; обязателен в stage/prod"},
 	{"AUTH_USER_ISSUER", "", "`iss` access JWT пользователя, как у user; обязателен в stage/prod"},
 	{"AUTH_USER_AUDIENCE", "", "`aud` access JWT пользователя, как у user; обязателен в stage/prod"},
 	{"SERVICE_TOKEN_FILE", "", "prod: projected ServiceAccount token с audience finassist-internal"},
@@ -90,6 +93,9 @@ var Vars = []Var{
 	{"MAINTENANCE_UNTIL", "", "Ожидаемое окончание техработ, RFC 3339; пусто — неизвестно"},
 	{"MAINTENANCE_RETRY_AFTER", "5m", "Retry-After техработ, пока окончание неизвестно или прошло; 1s–24h"},
 	{"JSON_BODY_LIMIT", "65536", "Предел JSON-тела запроса в байтах; 65536–1048576"},
+	{"UPLOAD_MAX_STREAMS", "16", "Предел одновременных загрузок процесса; отдельный от SSE"},
+	{"UPLOAD_MAX_STREAMS_PER_IP", "2", "Предел загрузок с одного адреса клиента"},
+	{"UPLOAD_BUSY_RETRY_AFTER", "1s", "Retry-After локального отказа загрузки; 1s–5m, original-request retryable=false"},
 	{"SSE_MAX_STREAMS", "2000", "Предел одновременных SSE-потоков процесса"},
 	{"SSE_MAX_STREAMS_PER_IP", "20", "Предел одновременных SSE-потоков с одного адреса клиента"},
 	{"SSE_BUSY_RETRY_AFTER", "10s", "Retry-After отказа 429 по пределу SSE-потоков; 1s–5m"},
@@ -142,7 +148,7 @@ func load(getenv func(string) string) (Config, error) {
 
 func loadAPI(env string, v map[string]string) (API, []error) {
 	api := API{
-		Enabled: env == "stage" || env == "prod", UserAddr: v["USER_GRPC_ADDR"], AssistantAddr: v["ASSISTANT_GRPC_ADDR"],
+		Enabled: env == "stage" || env == "prod", UserAddr: v["USER_GRPC_ADDR"], AssistantAddr: v["ASSISTANT_GRPC_ADDR"], StatementsAddr: v["STATEMENTS_GRPC_ADDR"],
 		UserIssuer: v["AUTH_USER_ISSUER"], UserAudience: v["AUTH_USER_AUDIENCE"],
 		Kubernetes: Kubernetes{TokenFile: v["SERVICE_TOKEN_FILE"], Issuer: v["AUTH_KUBERNETES_ISSUER"], JWKSURL: v["AUTH_KUBERNETES_JWKS_URL"],
 			CAFile: v["AUTH_KUBERNETES_CA_FILE"], APITokenFile: v["AUTH_KUBERNETES_API_TOKEN_FILE"], Namespace: v["AUTH_KUBERNETES_NAMESPACE"]},
@@ -188,6 +194,18 @@ func loadAPI(env string, v map[string]string) (API, []error) {
 	if err != nil || api.Streams.RetryAfter < time.Second || api.Streams.RetryAfter > 5*time.Minute {
 		errs = append(errs, errors.New("SSE_BUSY_RETRY_AFTER must be between 1s and 5m"))
 	}
+	api.Uploads.Max, err = strconv.Atoi(v["UPLOAD_MAX_STREAMS"])
+	if err != nil || api.Uploads.Max < 1 || api.Uploads.Max > 100000 {
+		errs = append(errs, errors.New("UPLOAD_MAX_STREAMS must be between 1 and 100000"))
+	}
+	api.Uploads.PerIP, err = strconv.Atoi(v["UPLOAD_MAX_STREAMS_PER_IP"])
+	if err != nil || api.Uploads.PerIP < 1 || api.Uploads.PerIP > api.Uploads.Max {
+		errs = append(errs, errors.New("UPLOAD_MAX_STREAMS_PER_IP must be between 1 and UPLOAD_MAX_STREAMS"))
+	}
+	api.Uploads.RetryAfter, err = time.ParseDuration(v["UPLOAD_BUSY_RETRY_AFTER"])
+	if err != nil || api.Uploads.RetryAfter < time.Second || api.Uploads.RetryAfter > 5*time.Minute {
+		errs = append(errs, errors.New("UPLOAD_BUSY_RETRY_AFTER must be between 1s and 5m"))
+	}
 	for _, part := range strings.Split(v["TRUSTED_PROXIES"], ",") {
 		if part = strings.TrimSpace(part); part == "" {
 			continue
@@ -202,7 +220,7 @@ func loadAPI(env string, v map[string]string) (API, []error) {
 	if !api.Enabled {
 		return api, errs
 	}
-	for _, key := range []string{"USER_GRPC_ADDR", "ASSISTANT_GRPC_ADDR", "AUTH_USER_ISSUER", "AUTH_USER_AUDIENCE", "CLIENT_MIN_VERSIONS"} {
+	for _, key := range []string{"USER_GRPC_ADDR", "ASSISTANT_GRPC_ADDR", "STATEMENTS_GRPC_ADDR", "AUTH_USER_ISSUER", "AUTH_USER_AUDIENCE", "CLIENT_MIN_VERSIONS"} {
 		if strings.TrimSpace(v[key]) == "" {
 			errs = append(errs, fmt.Errorf("%s is required in %s", key, env))
 		}

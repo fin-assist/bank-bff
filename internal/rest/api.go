@@ -24,6 +24,9 @@ type Route struct {
 	// by its contract, including every child RPC/effect. It is not service permission.
 	// Default false. A keyed operation still needs proof of its replay window.
 	ReplaySafe bool
+	// Input optionally validates a streaming input without buffering it. Nil retains
+	// the standard JSON pipeline. Route-specific parsing remains in the handler.
+	Input ValidateInput
 	// Handle serves a request that passed every BFF check.
 	Handle func(*Call)
 }
@@ -45,6 +48,8 @@ type Call struct {
 	Log *slog.Logger
 	// Streams limits concurrent SSE streams.
 	Streams *StreamLimiter
+	// Uploads has independent capacity from SSE and drains with ordinary HTTP.
+	Uploads *StreamLimiter
 	// Clock is "now" for fresh retry moments.
 	Clock func() time.Time
 	// replaySafe is established only by the validated route, never by the error reason or a UUID.
@@ -80,6 +85,7 @@ type Config struct {
 	Authenticate func(http.Handler) http.Handler
 	Metrics      *Metrics
 	Streams      *StreamLimiter
+	Uploads      *StreamLimiter
 	Log          *slog.Logger
 	Clock        func() time.Time
 	// TrustedProxies are the proxies whose X-Forwarded-For names the client.
@@ -150,13 +156,16 @@ func routeHandler(cfg Config, route Route, op apispec.Operation) http.Handler {
 		if rec, ok := w.(*recorder); ok {
 			rec.route = route.Path
 		}
-		body, refusal := ReadBody(r, op, cfg.BodyLimit)
+		path := pathValues(route.Path, r)
+		input := route.Input
+		if input == nil {
+			input = JSONInput
+		}
+		body, details, refusal := input(r, op, path, cfg.BodyLimit)
 		if refusal != nil {
 			refusal.Write(w)
 			return
 		}
-		path := pathValues(route.Path, r)
-		details := Validate(r.Context(), r, op, path, body)
 		key := ""
 		if route.Idempotent {
 			values := r.Header.Values("Idempotency-Key")
@@ -180,7 +189,7 @@ func routeHandler(cfg Config, route Route, op apispec.Operation) http.Handler {
 			ctx = WithHints(ctx, h)
 		}
 		route.Handle(&Call{W: w, R: r.WithContext(ctx), Op: op, Body: body, Metrics: cfg.Metrics,
-			Log: cfg.Log, Streams: cfg.Streams, Clock: cfg.Clock,
+			Log: cfg.Log, Streams: cfg.Streams, Uploads: cfg.Uploads, Clock: cfg.Clock,
 			replaySafe: route.ReplaySafe && !route.Idempotent && op.Route != nil &&
 				r.Method == route.Method && op.Route.Method == route.Method && op.Route.Path == route.Path})
 	})
