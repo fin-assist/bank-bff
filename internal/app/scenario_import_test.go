@@ -498,6 +498,30 @@ func scenarioImportMultipartEdges(t *testing.T, start starter) {
 	if commits.Load() != before {
 		t.Fatal("invalid envelope reached final EOF")
 	}
+	// An extra part's headers must be bounded before MIME parses them. The first
+	// file reaches RPC, but the invalid form must cancel before service EOF/commit.
+	var extraHeaderBody bytes.Buffer
+	extraWriter := multipart.NewWriter(&extraHeaderBody)
+	firstPart, err := extraWriter.CreateFormFile("file", "x.ofx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.WriteString(firstPart, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	extraHeader := textproto.MIMEHeader{}
+	extraHeader.Set("Content-Disposition", `form-data; name="extra"`)
+	extraHeader.Set("X-Large", strings.Repeat("x", 5<<20))
+	if _, err = extraWriter.CreatePart(extraHeader); err != nil {
+		t.Fatal(err)
+	}
+	if err = extraWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	beforeCalls := attempts.Load()
+	if r := send(extraHeaderBody.String(), extraWriter.FormDataContentType(), true); r.StatusCode != 400 || attempts.Load() != beforeCalls+1 || commits.Load() != before {
+		t.Fatalf("large second MIME header finalized or escaped validation: %d %s", r.StatusCode, r.body)
+	}
 	// A peer can refuse while the client is still sending, which may yield EOF
 	// from Send. Its FILE_TOO_LARGE status must still become 413.
 	b.peers.Statements.Set(func(s *testpeer.Statements) {

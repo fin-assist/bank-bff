@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"strings"
 	"testing"
 	"time"
@@ -298,6 +300,52 @@ func TestUnitImportInitialHeaderReadBudget(t *testing.T) {
 	u.h.ServeHTTP(res, req)
 	if res.Code != 400 || counter.bytes > maxImportEnvelopeBytes+1 || len(u.statements.upload.sent) != 0 {
 		t.Fatalf("unbounded initial MIME header: status=%d bytes=%d sends=%d", res.Code, counter.bytes, len(u.statements.upload.sent))
+	}
+}
+
+// The cumulative envelope cap must apply before parsing every potential header,
+// including when the first header has already spent most of that allowance.
+func TestUnitImportSecondHeaderUsesRemainingEnvelopeBudget(t *testing.T) {
+	for _, firstHeaderBytes := range []int{0, 60 << 10} {
+		t.Run(fmt.Sprintf("first_header_%d", firstHeaderBytes), func(t *testing.T) {
+			u := newUnitAPI(t, rest.StreamLimits{})
+			u.statements.upload = &uploadFake{}
+			var body bytes.Buffer
+			w := multipart.NewWriter(&body)
+			h := textproto.MIMEHeader{}
+			h.Set("Content-Disposition", `form-data; name="file"; filename="x.ofx"`)
+			if firstHeaderBytes > 0 {
+				h.Set("X-First", strings.Repeat("x", firstHeaderBytes))
+			}
+			first, err := w.CreatePart(h)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = io.WriteString(first, "abc"); err != nil {
+				t.Fatal(err)
+			}
+			h = textproto.MIMEHeader{}
+			h.Set("Content-Disposition", `form-data; name="extra"`)
+			h.Set("X-Large", strings.Repeat("x", 5<<20))
+			if _, err = w.CreatePart(h); err != nil {
+				t.Fatal(err)
+			}
+			if err = w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest("POST", "/v1/statements", strings.NewReader(body.String()))
+			counter := &importReadCounter{ReadCloser: req.Body}
+			req.Body = counter
+			req.Header.Set("X-Client-Version", "android/0.2.5+41")
+			req.Header.Set("Authorization", goodToken)
+			req.Header.Set("Idempotency-Key", testKey)
+			req.Header.Set("Content-Type", w.FormDataContentType())
+			res := httptest.NewRecorder()
+			u.h.ServeHTTP(res, req)
+			if res.Code != 400 || counter.bytes > maxImportEnvelopeBytes+1+len("abc") || u.statements.upload.closed || len(u.statements.upload.sent) != 2 {
+				t.Fatalf("unbounded second MIME header: status=%d bytes=%d sends=%d closed=%v", res.Code, counter.bytes, len(u.statements.upload.sent), u.statements.upload.closed)
+			}
+		})
 	}
 }
 

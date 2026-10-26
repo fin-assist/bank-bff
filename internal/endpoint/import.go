@@ -181,6 +181,14 @@ func (d Deps) uploadStatement(c *rest.Call) {
 	}
 	// Do not send gRPC EOF until the ENTIRE form has been checked. Cancelling an
 	// invalid extra/truncated part prevents the service's final hash lookup/effect.
+	// NextRawPart parses MIME headers before returning an unexpected part. Re-arm
+	// the remaining envelope budget first, including bytes already prefetched by
+	// multipart's buffer, so a second header cannot allocate the parser's 10 MiB cap.
+	wire.headerRemaining = maxImportEnvelopeBytes + 1 - (wire.bytes - total)
+	if wire.headerRemaining <= 0 {
+		invalidImport(c, "multipart envelope exceeds its budget")
+		return
+	}
 	if _, err = reader.NextRawPart(); !errors.Is(err, io.EOF) {
 		invalidImport(c, "expected exactly one file part")
 		return
@@ -258,7 +266,7 @@ type importWireReader struct {
 
 func (r *importWireReader) Read(p []byte) (int, error) {
 	if r.headerRemaining == 0 {
-		return 0, errors.New("multipart initial header exceeds budget")
+		return 0, errors.New("multipart header exceeds budget")
 	}
 	if r.headerRemaining > 0 && int64(len(p)) > r.headerRemaining {
 		p = p[:int(r.headerRemaining)]
