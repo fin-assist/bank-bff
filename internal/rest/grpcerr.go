@@ -21,7 +21,8 @@ var fieldShape = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.\[\]-]{0,127}$`)
 // grpc-api.md 5). declared holds the statuses the operation declares in openapi.yaml.
 // An incomplete or unregistered error, a bare status and a registry status the
 // operation does not declare become 500 INTERNAL_ERROR and are counted; status
-// messages never reach the client.
+// messages never reach the client. Service retry permission is retained privately;
+// without a validated Call the written response remains conservatively non-retryable.
 func (m *Metrics) FromGRPC(err error, declared map[int]bool) Error {
 	if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
 		// The client went away; the response is written for completeness only.
@@ -32,12 +33,12 @@ func (m *Metrics) FromGRPC(err error, declared map[int]bool) Error {
 		m.unmappedError(reasonOf(err), status.Code(err).String())
 		return Internal()
 	}
-	if !declared[r.Spec.HTTPStatus] {
+	if status.Code(err) != r.Spec.GRPCCode || !declared[r.Spec.HTTPStatus] {
 		m.unmappedError(r.Code, status.Code(err).String())
 		return Internal()
 	}
 	e := Error{Status: r.Spec.HTTPStatus, Code: r.Code, RetryAfter: r.RetryAfter,
-		RetryAt: r.Metadata["retry_at"], ResetsAt: r.Metadata["resets_at"]}
+		RetryAt: r.Metadata["retry_at"], ResetsAt: r.Metadata["resets_at"], serviceRequestRetryable: r.RequestRetryable}
 	// A service description may carry input or internal names: the client gets the
 	// BFF's own message for one of the three known codes, and a bounded field name.
 	for _, v := range r.Violations {

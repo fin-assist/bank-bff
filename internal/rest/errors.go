@@ -38,6 +38,11 @@ type Error struct {
 	RetryAt, ResetsAt, Until string
 	// RetryAfter is the fresh wait of the Retry-After header; zero omits the header.
 	RetryAfter time.Duration
+	// Retryable permits replay of the whole original REST request, not a new operation attempt.
+	// Nil has no permission; Write emits explicit false for the new BFF contract.
+	Retryable *bool
+	// serviceRequestRetryable is only the decoded original-RPC permission, never sufficient by itself.
+	serviceRequestRetryable *bool
 }
 
 type errorBody struct {
@@ -53,6 +58,7 @@ type errorObject struct {
 	RetryAt     string   `json:"retry_at,omitempty"`
 	ResetsAt    string   `json:"resets_at,omitempty"`
 	Until       string   `json:"until,omitempty"`
+	Retryable   *bool    `json:"retryable,omitempty"`
 }
 
 // Internal is the generic 500 INTERNAL_ERROR.
@@ -85,6 +91,10 @@ func RetryAfterSeconds(d time.Duration) int64 {
 // replayed and failed answers carry a fresh Date too.
 func (e Error) Write(w http.ResponseWriter) {
 	entry, _ := catalog.REST(e.Code)
+	retryable := false
+	if e.Retryable != nil {
+		retryable = *e.Retryable
+	}
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	h.Set("Cache-Control", "no-store")
@@ -94,7 +104,7 @@ func (e Error) Write(w http.ResponseWriter) {
 	w.WriteHeader(e.Status)
 	_ = json.NewEncoder(w).Encode(errorBody{errorObject{
 		Code: e.Code, Message: entry.Diagnostic, UserMessage: entry.Text, Severity: entry.Severity,
-		Details: e.Details, RetryAt: e.RetryAt, ResetsAt: e.ResetsAt, Until: e.Until,
+		Details: e.Details, RetryAt: e.RetryAt, ResetsAt: e.ResetsAt, Until: e.Until, Retryable: &retryable,
 	}})
 }
 
