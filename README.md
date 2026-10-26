@@ -4,7 +4,7 @@ Stateless HTTP BFF «Понятных финансов». Каркас пере�
 
 Контракты — [`fin-assist/contracts`](https://github.com/fin-assist/contracts): `docs/api.md`, `openapi/openapi.yaml`, `docs/grpc-api.md`. BFF не хранит состояние; PostgreSQL/миграций, входящего gRPC business server, бизнес-заданий и обхода авторизации нет. Исходящие вызовы — `go-grpc` v0.2.0 к `user` и `assistant`, идентичность — `go-identity` v0.2.0, ошибки — `finerr` из `contracts/gen/go` v0.5.0, проверка запросов по встроенной копии `openapi.yaml` — `kin-openapi`.
 
-FIN-342 добавляет REST `error.retryable`: явное разрешение сервиса соединяется с доказанной безопасностью всего исходного REST-запроса. Без одной из гарантий — `false`; UUID не доказывает возраст ключа. В ошибках результата помощника канонический вложенный `google.rpc.Status` имеет приоритет над прежним enum, а разрешение новой генерации остаётся отдельным свойством сервиса. Условия совместимой выкладки — [docs/config.md](docs/config.md), правила и границы — [docs/server.md](docs/server.md).
+FIN-342 добавляет REST `error.retryable`: явное разрешение источника отказа (сервиса или транспортного обработчика BFF) соединяется с доказанной безопасностью всего исходного REST-запроса. Без одной из гарантий — `false`; UUID не доказывает возраст ключа. В ошибках результата помощника канонический вложенный `google.rpc.Status` имеет приоритет над прежним enum, а разрешение новой генерации остаётся отдельным свойством сервиса. Условия совместимой выкладки — [docs/config.md](docs/config.md), правила и границы — [docs/server.md](docs/server.md).
 
 ```bash
 make run    # Go toolchain из go.mod, HTTP :8080 и operational :9091

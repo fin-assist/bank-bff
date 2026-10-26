@@ -118,7 +118,7 @@ func openStream(c *rest.Call, timeout time.Duration) (ctx context.Context, done 
 	release, ok := c.Streams.Acquire(rest.HintsFrom(c.R.Context()).ClientIP)
 	if !ok {
 		c.Metrics.StreamRejected(c.Op.Route.Path)
-		c.Streams.Busy(c.Clock()).Write(c.W)
+		c.Refuse(c.Streams.Busy(c.Clock()), true)
 		return nil, nil, false
 	}
 	if err := rest.ExtendDeadlines(c.W, time.Now().Add(timeout+streamWriteMargin)); err != nil {

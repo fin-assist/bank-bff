@@ -37,7 +37,7 @@ ENV=dev builds no public API (NewAssembly refuses dev): no auth bypass. Pre-stre
 JSON; streams extend their own connection deadlines and have their own deadline and caps.
 Add an infrastructure dependency only for a real endpoint/usecase; no dummy code for coverage.
 
-FIN-342 uses tagged contracts/gen/go v0.5.0. REST retryable is service RequestRetryInfo AND
+FIN-342 uses tagged contracts/gen/go v0.5.0. REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
 the declared safety of the entire REST operation; an unknown keyed POST replay window stays false.
 Do not infer permission from an error code, HTTP status, RetryInfo, text or UUID. Nested result Status
 is decoded only by finerr.DecodeResultStatus: valid canonical reason wins, present-invalid never reads

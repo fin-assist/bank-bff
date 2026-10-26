@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -109,11 +110,16 @@ func scenarioStreamLimit(t *testing.T, start starter) {
 		c.API.Streams = rest.StreamLimits{Max: 1, PerIP: 1, RetryAfter: 7 * time.Second}
 	}, WithStreamTimings(time.Hour, 5*time.Second, 5*time.Second))
 	opened, release := make(chan struct{}), make(chan struct{})
+	notify := sync.OnceFunc(func() { close(opened) })
 	b.peers.Auth.Set(func(a *testpeer.Auth) {
 		a.WatchFunc = func(_ *userv1.WatchPhoneVerificationRequest, s grpc.ServerStreamingServer[userv1.WatchPhoneVerificationResponse]) error {
 			_ = s.Send(&userv1.WatchPhoneVerificationResponse{Status: userv1.VerificationStatus_VERIFICATION_STATUS_PENDING})
-			close(opened)
-			<-release
+			notify()
+			select {
+			case <-release:
+			case <-s.Context().Done():
+				return s.Context().Err()
+			}
 			return s.Send(&userv1.WatchPhoneVerificationResponse{Status: userv1.VerificationStatus_VERIFICATION_STATUS_EXPIRED})
 		}
 	})
@@ -132,17 +138,40 @@ func scenarioStreamLimit(t *testing.T, start starter) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the first stream was not opened")
 	}
-	r := b.do(t, request{method: "GET", path: "/v1/assistant/messages/a1/events", route: "/v1/assistant/messages/{answer_id}/events",
-		header: base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})})
-	if r.StatusCode != 429 || errorCode(r) != "RATE_LIMITED" || r.Header.Get("Retry-After") != "7" || r.json["error"].(map[string]any)["retry_at"] == nil {
-		t.Fatalf("%d %s", r.StatusCode, r.body)
+	requests := []request{
+		{method: "GET", path: "/v1/assistant/messages/a1/events", route: "/v1/assistant/messages/{answer_id}/events",
+			header: base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})},
+		{method: "GET", path: "/v1/auth/phone/events", route: "/v1/auth/phone/events", header: base(map[string]string{"X-Verification-Token": "vt"})},
 	}
-	if len(b.peers.Calls(assistantv1.AssistantService_WatchAnswer_FullMethodName)) != 0 {
+	for _, req := range requests {
+		r := b.do(t, req)
+		if r.StatusCode != 429 || errorCode(r) != "RATE_LIMITED" || r.Header.Get("Retry-After") != "7" || r.json["error"].(map[string]any)["retry_at"] == nil || r.json["error"].(map[string]any)["retryable"] != true {
+			t.Fatalf("%s: %d %s", req.path, r.StatusCode, r.body)
+		}
+	}
+	if len(b.peers.Calls(assistantv1.AssistantService_WatchAnswer_FullMethodName)) != 0 || len(b.peers.Calls(userv1.AuthService_WatchPhoneVerification_FullMethodName)) != 1 {
 		t.Fatal("a refused stream reached the service")
 	}
 	close(release)
 	if events, _ := b.contract.Events(t, "GET", "/v1/auth/phone/events", strings.NewReader(string(await(t, first, "first stream")))); len(events) != 2 || events[1].Data["status"] != "expired" {
 		t.Fatalf("%v", events)
+	}
+	// Capacity is free again: the same GETs can open successfully. The published
+	// wait remains client advice, not a server reservation of the stream slot.
+	b.peers.Assistant.Set(func(a *testpeer.Assistant) {
+		a.WatchFunc = func(_ *assistantv1.WatchAnswerRequest, s grpc.ServerStreamingServer[assistantv1.WatchAnswerResponse]) error {
+			if err := s.Send(&assistantv1.WatchAnswerResponse{TimeZone: "Europe/Moscow", Event: &assistantv1.WatchAnswerResponse_Snapshot{Snapshot: &assistantv1.AnswerSnapshot{Status: assistantv1.AnswerStatus_ANSWER_STATUS_COMPLETE, Currency: "RUB"}}}); err != nil {
+				return err
+			}
+			return s.Send(&assistantv1.WatchAnswerResponse{Event: &assistantv1.WatchAnswerResponse_Done{Done: &assistantv1.AnswerDone{RemainingLimit: 5}}})
+		}
+	})
+	for _, req := range requests {
+		got := b.raw(t, req)
+		events, _ := b.contract.Events(t, "GET", req.route, strings.NewReader(string(got.body)))
+		if got.StatusCode != 200 || len(events) != 2 {
+			t.Fatalf("%s after capacity release: %d %s", req.path, got.StatusCode, got.body)
+		}
 	}
 }
 
