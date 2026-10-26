@@ -389,7 +389,16 @@ func importDeclared(method, route string, status int) bool {
 // Exact file boundary, chunked transport and raw transfer bytes are exercised at
 // both levels. The service fixture can commit only after the client's final EOF.
 func scenarioImportMultipartEdges(t *testing.T, start starter) {
-	b := start(t, nil)
+	var attempts atomic.Int32
+	// Server-side dispatch may lag a preceding cancelled upload. Observe the actual
+	// client invocation synchronously, before grpc can queue/cancel that request.
+	observer := grpc.WithChainStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		if method == statementdatav1.StatementsService_UploadStatement_FullMethodName {
+			attempts.Add(1)
+		}
+		return streamer(ctx, desc, cc, method, opts...)
+	})
+	b := start(t, nil, WithDialOptions(observer))
 	access := b.keys.Access("u1")
 	var commits atomic.Int32
 	var gotName string
@@ -466,12 +475,15 @@ func scenarioImportMultipartEdges(t *testing.T, start starter) {
 		strings.Replace(body, "application/octet-stream", strings.Repeat("x", 65<<10), 1),
 		strings.Replace(body, "Content-Type: application/octet-stream", "X-Envelope: "+strings.Repeat("x", 65<<10)+"\r\nContent-Type: application/octet-stream", 1),
 	} {
-		beforeCalls := len(b.peers.Calls(statementdatav1.StatementsService_UploadStatement_FullMethodName))
+		beforeCalls := attempts.Load()
 		if r := send(bad, ct, true); r.StatusCode != 400 {
 			t.Fatalf("invalid envelope: %d %s", r.StatusCode, r.body)
 		}
-		if index >= 2 && index <= 5 && len(b.peers.Calls(statementdatav1.StatementsService_UploadStatement_FullMethodName)) != beforeCalls {
-			t.Fatal("invalid filename/oversized metadata reached RPC")
+		if index == 0 && attempts.Load() != beforeCalls+1 {
+			t.Fatal("truncated form did not exercise cancellation after RPC initiation")
+		}
+		if index != 0 && attempts.Load() != beforeCalls {
+			t.Fatalf("invalid local form %d initiated RPC: before=%d after=%d", index, beforeCalls, attempts.Load())
 		}
 	}
 	if commits.Load() != before {
