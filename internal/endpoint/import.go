@@ -133,7 +133,7 @@ func (d Deps) uploadStatement(c *rest.Call) {
 	// FileName() calls filepath.Base and corrupts the hash identity; use the raw
 	// decoded MIME parameter instead, preserving Unicode, path, spaces and case.
 	filename, present := p["filename"]
-	if err != nil || disposition != "form-data" || p["name"] != "file" || !present || filename == "" || !utf8.ValidString(filename) || strings.ContainsRune(filename, 0) {
+	if err != nil || disposition != "form-data" || p["name"] != "file" || !present || !utf8.ValidString(filename) || strings.ContainsRune(filename, 0) {
 		invalidImport(c, "expected one named file part")
 		return
 	}

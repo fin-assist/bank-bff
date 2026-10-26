@@ -465,10 +465,19 @@ func scenarioImportMultipartEdges(t *testing.T, start starter) {
 	if r := send(body, ct, true); r.StatusCode != 202 || gotBody.String() != raw || len(gotName) <= 255 {
 		t.Fatalf("raw transfer/name changed: %d %s", r.StatusCode, r.body)
 	}
+	// FIN-297 defines an empty filename as an empty second hash component. The
+	// BFF forwards opaque content and the exact present value; hashing stays remote.
+	emptyContent := "opaque\x00content\r\n"
+	emptyBody, emptyCT := multipartBody(t, "", emptyContent, false)
+	beforeEmpty := commits.Load()
+	if r := send(emptyBody, emptyCT, true); r.StatusCode != 202 || r.json["file_name"] != "" || gotName != "" || gotBody.String() != emptyContent || commits.Load() != beforeEmpty+1 {
+		t.Fatalf("present empty filename was changed or failed to reach EOF: %d %s", r.StatusCode, r.body)
+	}
 	before := commits.Load()
 	for index, bad := range []string{
 		strings.TrimSuffix(body, body[len(body)-8:]),
 		strings.Replace(body, `name="file"`, `name="other"`, 1),
+		strings.Replace(body, fmt.Sprintf(`; filename="%s"`, strings.Repeat("д", 160)+".ofx"), "", 1),
 		strings.Replace(body, `filename="`, "filename=\"\x00", 1),
 		strings.Replace(body, `filename="`, "filename=\"\xff", 1),
 		strings.Replace(body, `filename="`, `filename="`+strings.Repeat("x", 65<<10), 1),
