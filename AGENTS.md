@@ -14,7 +14,7 @@ The owner's latest decision and contracts take precedence over copied template a
 - internal/app: explicit assembly of public and operational HTTP listeners and bounded shutdown;
   api.go builds the public API (embedded contract, go-identity Assembly, go-grpc peers) before bind.
 - internal/rest: request ID, gates (MAINTENANCE, X-Client-Version), auth, body limit and kin-openapi
-  validation, finerr.ToREST translation, SSE pump/limits, metrics and access log.
+  validation, finerr.ToREST translation and whole-request retry safety, SSE pump/limits, metrics and access log.
 - internal/endpoint: the 14 operations, REST <-> gRPC conversion; internal/catalog: user_message and
   severity texts (FIN-225); internal/apispec: embedded openapi.yaml copy with its contracts commit.
 - internal/testpeer: test infrastructure only — bufconn fakes of user/assistant, keys, contract checks.
@@ -36,6 +36,14 @@ background loop is go-identity Assembly.Run key refresh, started after bind and 
 ENV=dev builds no public API (NewAssembly refuses dev): no auth bypass. Pre-stream SSE failures are
 JSON; streams extend their own connection deadlines and have their own deadline and caps.
 Add an infrastructure dependency only for a real endpoint/usecase; no dummy code for coverage.
+
+FIN-342 uses tagged contracts/gen/go v0.5.0. REST retryable is service RequestRetryInfo AND
+the declared safety of the entire REST operation; an unknown keyed POST replay window stays false.
+Do not infer permission from an error code, HTTP status, RetryInfo, text or UUID. Nested result Status
+is decoded only by finerr.DecodeResultStatus: valid canonical reason wins, present-invalid never reads
+legacy code, absent uses the legacy adapter. Result retryable is the service's separate new-attempt
+permission, including false. Do not detect assistant capability from legacy text or proto3 bool.
+Rollout/rollback prerequisites are in docs/config.md; import routes remain unimplemented.
 
 ## Security
 

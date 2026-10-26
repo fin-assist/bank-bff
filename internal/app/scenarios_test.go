@@ -23,6 +23,8 @@ var scenarios = map[string]func(*testing.T, starter){
 	"StreamDeadlines":       scenarioStreamOutlivesUnaryTimeouts,
 	"ShutdownEndsStreams":   scenarioShutdownEndsStreams,
 	"OperationErrors":       scenarioOperationErrors,
+	"RequestRetryAdvice":    scenarioRequestRetryAdvice,
+	"ResultStatus":          scenarioResultStatus,
 	"TrustedProxies":        scenarioTrustedProxies,
 }
 
