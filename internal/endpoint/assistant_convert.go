@@ -5,6 +5,8 @@ import (
 	"time"
 
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
+	"github.com/fin-assist/contracts/gen/go/finerr"
+	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 
 	"github.com/fin-assist/bank-bff/internal/catalog"
 	"github.com/fin-assist/bank-bff/internal/rest"
@@ -234,6 +236,31 @@ func (c converter) answerCode(code assistantv1.AnswerErrorCode) string {
 	return "INTERNAL_ERROR"
 }
 
+// answerResult applies canonical presence before the legacy adapter. The common
+// result decoder is open: neither unary registry membership nor a legacy alias
+// can replace a valid reason. Presentation and all metrics stay scenario-scoped.
+func (c converter) answerResult(wire *statuspb.Status, legacy assistantv1.AnswerErrorCode) (string, catalog.Entry) {
+	if wire == nil {
+		code := c.answerCode(legacy)
+		return code, answerPresentation(code)
+	}
+	result, valid := finerr.DecodeResultStatus(wire)
+	if !valid {
+		c.metrics.Untranslated("AnswerError.status", "invalid")
+		return "INTERNAL_ERROR", answerPresentation("INTERNAL_ERROR")
+	}
+	// UNSPECIFIED/unknown aliases are legitimate during additive rollout. Only
+	// a known nonzero alias that contradicts the canonical reason is diagnosed.
+	if name, known := enumName(legacy); known && name != result.Reason {
+		c.metrics.Untranslated("AnswerError.status", "legacy_mismatch")
+	}
+	entry, known := catalog.Answer(result.Reason)
+	if !known {
+		c.metrics.Untranslated("AnswerError.reason", "unknown")
+	}
+	return result.Reason, entry
+}
+
 // Presentation of a failed answer from the BFF catalog; service text is never copied.
 func answerPresentation(code string) catalog.Entry {
 	entry, _ := catalog.Answer(code)
@@ -295,8 +322,7 @@ func (c converter) message(m *assistantv1.Message) (Message, bool) {
 		out.Chips = &chips
 		out.Source = c.source(m.Source)
 	case assistantv1.AnswerStatus_ANSWER_STATUS_FAILED:
-		code := c.answerCode(m.GetErrorCode())
-		entry := answerPresentation(code)
+		code, entry := c.answerResult(m.GetError(), m.GetErrorCode())
 		out.ErrorCode = &code
 		out.ErrorUserMessage, out.ErrorSeverity, out.ErrorText = &entry.Text, &entry.Severity, &entry.Text
 		// The service's permission of a new attempt, with presence (grpc-api.md 5.3).

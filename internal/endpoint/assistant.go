@@ -196,8 +196,7 @@ func (c converter) answerEvent(m *assistantv1.WatchAnswerResponse) (name string,
 	case *assistantv1.WatchAnswerResponse_Done:
 		return "done", doneEvent{Charged: e.Done.GetCharged(), RemainingLimit: e.Done.GetRemainingLimit()}, true, true
 	case *assistantv1.WatchAnswerResponse_Error:
-		code := c.answerCode(e.Error.GetCode())
-		entry := answerPresentation(code)
+		code, entry := c.answerResult(e.Error.GetStatus(), e.Error.GetCode())
 		return "error", AnswerError{Code: code, Message: entry.Diagnostic, UserMessage: entry.Text, Severity: entry.Severity,
 			Text: entry.Text, Retryable: e.Error.GetRetryable(), RemainingLimit: e.Error.GetRemainingLimit()}, true, true
 	}
