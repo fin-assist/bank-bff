@@ -88,7 +88,7 @@ ReadHeaderTimeout 5s, ReadTimeout 10s, WriteTimeout 30s, IdleTimeout 60s, MaxHea
 | `finassist_untranslated_code_total` | `field`, `code` (`unknown`, `content`) |
 | `finassist_empty_required_field_total` | `field`: `Message.currency`, `AnswerSnapshot.currency` (ряды с 0 при старте) |
 | `finassist_sse_streams` | `route` |
-| `finassist_sse_rejected_total` | `route` |
+| `finassist_sse_rejected_total` | `route`: SSE и POST /v1/statements, отклонённые локальным бюджетом |
 | `grpc_client_handled_total`, `grpc_client_handling_seconds` | `peer`, `method`, `code` (go-grpc) |
 | `finassist_identity_rejected_total`, `finassist_identity_jwks_skipped_keys` | go-identity |
 
@@ -109,6 +109,6 @@ ImportResult не содержит currency в proto; REST получает пр
 
 GET и известный идемпотентный DELETE объявляют безопасность всей операции; положительный REST retryable требует explicit service advice. POST всегда false без доказанного окна исходного ключа. SSE transport failure после 200 только закрывает соединение; терминальное error — исключительно сохранённый бизнес-результат сервиса.
 
-Загрузки имеют отдельный от SSE бюджет UPLOAD_MAX_STREAMS=16 и UPLOAD_MAX_STREAMS_PER_IP=2. Слот берётся до чтения формы и RPC; локальный 429 содержит свежее ожидание UPLOAD_BUSY_RETRY_AFTER и retryable=false, потому что срок исходного POST-ключа не доказан. Отмена, ошибка и успех освобождают слот; shutdown отменяет внутренние upload RPC независимо от SSE.
+Загрузки имеют отдельный от SSE бюджет UPLOAD_MAX_STREAMS=16 и UPLOAD_MAX_STREAMS_PER_IP=2. Слот берётся до чтения формы и RPC; локальный 429 содержит свежее ожидание UPLOAD_BUSY_RETRY_AFTER и retryable=false, потому что срок исходного POST-ключа не доказан. Отмена, ошибка и успех освобождают слот; при shutdown активные upload HTTP-запросы дренируются в пределах SHUTDOWN_TIMEOUT; они не отменяются вместе с SSE. После срока HTTP-соединение закрывается принудительно и отменяет связанный RPC.
 
 Разбор первого MIME-заголовка получает временный read-бюджет 64 КиБ + 1 байт до NextRawPart: stdlib иначе допускает заголовки до 10 МиБ. После завершения заголовка этот бюджет снимается, остаются общий wire-limit и окончательный предел оболочки. StreamingInput проверяет клон с http.NoBody: kin-openapi 0.133 читает тело в security validation даже с ExcludeRequestBody; реальная identity уже проверена, headers/query/path остаются исходными.

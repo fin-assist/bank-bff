@@ -11,6 +11,7 @@ var scenarios = map[string]func(*testing.T, starter){
 	"ImportUnknownReason": scenarioImportUnknownReason,
 	"ImportCapacity":      scenarioImportCapacity, "ImportEarlyLength": scenarioImportEarlyLength,
 	"ImportStreamingBeforeEOF": scenarioImportStreamingBeforeEOF,
+	"ImportShutdown":           scenarioImportShutdown,
 	"ImportRead":               scenarioImportRead, "ImportUpload": scenarioImportUpload, "ImportWatch": scenarioImportWatch, "ImportErrors": scenarioImportErrors,
 	"StartPhone":            scenarioStartPhone,
 	"RequestTooLarge":       scenarioRequestTooLarge,

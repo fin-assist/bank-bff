@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -44,12 +45,15 @@ func (s *serving) text() string { s.mu.Lock(); defer s.mu.Unlock(); return s.buf
 
 // bff is a running full assembly (app.Run) with peers on bufconn.
 type bff struct {
-	public, operational string
-	peers               *testpeer.Peers
-	contract            *testpeer.Contract
-	keys                *testpeer.Keys
-	logs                *serving
-	stop                func()
+	public, operational   string
+	peers                 *testpeer.Peers
+	contract              *testpeer.Contract
+	keys                  *testpeer.Keys
+	logs                  *serving
+	stop                  func()
+	registry              *prometheus.Registry
+	expectShutdownTimeout bool
+	stopErr               error
 }
 
 const clientVersion = "android/0.2.5+41"
@@ -92,7 +96,8 @@ func startBFF(t *testing.T, mutate func(*config.Config, *testpeer.Peers), opts .
 			cancel()
 			select {
 			case err := <-done:
-				if err != nil {
+				b.stopErr = err
+				if err != nil && (!b.expectShutdownTimeout || !errors.Is(err, context.DeadlineExceeded)) {
 					t.Errorf("Run: %v", err)
 				}
 			case <-time.After(5 * time.Second):
@@ -225,7 +230,8 @@ func startAssembly(t *testing.T, mutate func(*config.Config, *testpeer.Peers), o
 	}
 	logs := &serving{started: make(chan [2]string, 1)}
 	log := slog.New(slog.NewJSONHandler(logs, nil))
-	api, err := newPublicAPI(cfg, log, prometheus.NewRegistry(), o)
+	registry := prometheus.NewRegistry()
+	api, err := newPublicAPI(cfg, log, registry, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,16 +239,16 @@ func startAssembly(t *testing.T, mutate func(*config.Config, *testpeer.Peers), o
 	srv := httptest.NewUnstartedServer(api.handler)
 	srv.Config = server(api.handler, log, o)
 	srv.Config.RegisterOnShutdown(api.streams.Shutdown)
-	srv.Config.RegisterOnShutdown(api.uploads.Shutdown)
 	srv.Start()
-	b := &bff{peers: peers, contract: testpeer.LoadContract(t), keys: keys, logs: logs, public: srv.Listener.Addr().String()}
+	b := &bff{peers: peers, contract: testpeer.LoadContract(t), keys: keys, logs: logs, public: srv.Listener.Addr().String(), registry: registry}
 	var once sync.Once
 	b.stop = func() {
 		once.Do(func() {
 			// Like Run: a graceful shutdown with a bound, then close what is left.
 			ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 			defer cancel()
-			_ = srv.Config.Shutdown(ctx)
+			b.stopErr = srv.Config.Shutdown(ctx)
+			b.stopErr = errors.Join(b.stopErr, srv.Config.Close())
 			srv.Close()
 			api.close(log)
 		})

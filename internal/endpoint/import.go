@@ -105,6 +105,7 @@ func (d Deps) uploadStatement(c *rest.Call) {
 	}
 	release, ok := c.Uploads.Acquire(rest.HintsFrom(c.R.Context()).ClientIP)
 	if !ok {
+		c.Metrics.StreamRejected(c.Op.Route.Path)
 		c.Refuse(c.Uploads.Busy(c.Clock()), false)
 		return
 	}
@@ -146,8 +147,6 @@ func (d Deps) uploadStatement(c *rest.Call) {
 	}
 	ctx, cancel := context.WithTimeout(c.R.Context(), UploadDeadline)
 	defer cancel()
-	detach := c.Uploads.StopOnShutdown(cancel)
-	defer detach()
 	stream, err := d.Statements.UploadStatement(ctx)
 	if err != nil {
 		c.Fail(err)

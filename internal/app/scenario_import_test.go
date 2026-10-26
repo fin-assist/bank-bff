@@ -665,6 +665,9 @@ func scenarioImportCapacity(t *testing.T, start starter) {
 	go func() { r, e := b.fetch(t.Context(), req("192.0.2.2")); second <- outcome{r, e} }()
 	await(t, entered, "secondupload")
 	checkBusy("192.0.2.3")
+	if got := b.streamingRejected(t, "/v1/statements"); got != 2 {
+		t.Fatalf("upload rejection metric=%v", got)
+	}
 	// Upload saturation cannot consume the independently configured SSE budget.
 	r := b.do(t, request{method: "GET", path: "/v1/statements/u1/progress", route: "/v1/statements/{upload_id}/progress", header: base(map[string]string{"Authorization": "Bearer " + access})})
 	if r.StatusCode != 200 {

@@ -48,7 +48,7 @@ type Call struct {
 	Log *slog.Logger
 	// Streams limits concurrent SSE streams.
 	Streams *StreamLimiter
-	// Uploads has an independent capacity and shutdown scope from SSE.
+	// Uploads has independent capacity from SSE and drains with ordinary HTTP.
 	Uploads *StreamLimiter
 	// Clock is "now" for fresh retry moments.
 	Clock func() time.Time
