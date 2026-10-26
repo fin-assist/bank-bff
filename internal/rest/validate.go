@@ -191,8 +191,15 @@ func JSONInput(r *http.Request, op apispec.Operation, path map[string]string, li
 func StreamingInput(r *http.Request, op apispec.Operation, path map[string]string, _ int64) ([]byte, []Detail, *Error) {
 	options := *validationOptions
 	options.ExcludeRequestBody = true
+	// kin-openapi 0.133 security validation reads the entire body even with the
+	// no-op authenticator. Identity already ran; give schema checks an empty body
+	// while retaining the original headers/path/query and the real stream untouched.
+	clone := r.Clone(r.Context())
+	clone.Body = http.NoBody
+	clone.ContentLength = 0
+	clone.GetBody = nil
 	err := openapi3filter.ValidateRequest(r.Context(), &openapi3filter.RequestValidationInput{
-		Request: r, PathParams: path, Route: op.Route, Options: &options,
+		Request: clone, PathParams: path, Route: op.Route, Options: &options,
 	})
 	if err == nil {
 		return nil, nil, nil

@@ -8,7 +8,10 @@ import "testing"
 // validated against openapi.yaml and every SSE event against its x-sse-events schema.
 var scenarios = map[string]func(*testing.T, starter){
 	"ImportLifetime": scenarioImportLifetime, "ImportMultipartEdges": scenarioImportMultipartEdges,
-	"ImportRead": scenarioImportRead, "ImportUpload": scenarioImportUpload, "ImportWatch": scenarioImportWatch, "ImportErrors": scenarioImportErrors,
+	"ImportUnknownReason": scenarioImportUnknownReason,
+	"ImportCapacity":      scenarioImportCapacity, "ImportEarlyLength": scenarioImportEarlyLength,
+	"ImportStreamingBeforeEOF": scenarioImportStreamingBeforeEOF,
+	"ImportRead":               scenarioImportRead, "ImportUpload": scenarioImportUpload, "ImportWatch": scenarioImportWatch, "ImportErrors": scenarioImportErrors,
 	"StartPhone":            scenarioStartPhone,
 	"RequestTooLarge":       scenarioRequestTooLarge,
 	"WatchPhone":            scenarioWatchPhone,

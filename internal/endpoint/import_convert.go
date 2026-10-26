@@ -309,13 +309,16 @@ func (c converter) importEvent(m *statementdatav1.WatchUploadResponse) (string, 
 	}
 }
 
+// unread preserves every record: reason is an open statistical field, while
+// reason_name is the service's display text (REST 3.6). An enum this build cannot
+// name gets a transport fallback, never a fabricated business reason/action.
 func (c converter) unread(m *statementdatav1.ListUnreadLinesResponse) UnreadLines {
 	out := UnreadLines{Lines: []UnreadLine{}}
 	for _, v := range m.GetLines() {
 		code, known := enumCode(v.GetReason())
 		if !known {
+			code = "unknown"
 			c.metrics.Untranslated("UnreadLine.reason", "unknown")
-			continue
 		}
 		out.Lines = append(out.Lines, UnreadLine{v.GetUploadId(), v.GetFileName(), v.GetLineNumber(), optionalMoment(v.GetDate(), c.loc), code, v.GetReasonName()})
 	}

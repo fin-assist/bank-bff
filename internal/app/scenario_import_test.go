@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/textproto"
 	"strings"
 	"sync/atomic"
@@ -27,6 +29,7 @@ import (
 
 	"github.com/fin-assist/bank-bff/internal/config"
 	"github.com/fin-assist/bank-bff/internal/endpoint"
+	"github.com/fin-assist/bank-bff/internal/rest"
 	"github.com/fin-assist/bank-bff/internal/testpeer"
 )
 
@@ -66,7 +69,7 @@ func scenarioImportRead(t *testing.T, start starter) {
 			if r.GetScope() == nil {
 				t.Error("missing scope")
 			}
-			return &statementdatav1.ListUnreadLinesResponse{TimeZone: "Asia/Novosibirsk", Lines: []*statementdatav1.UnreadLine{{UploadId: "u1", FileName: "../ RAW.ofx ", LineNumber: 1, Date: created, Reason: 1, ReasonName: "не распознали сумму"}, {UploadId: "u1", LineNumber: 2, Reason: 99, ReasonName: "unknown"}}}, nil
+			return &statementdatav1.ListUnreadLinesResponse{TimeZone: "Asia/Novosibirsk", Lines: []*statementdatav1.UnreadLine{{UploadId: "u1", FileName: "../ RAW.ofx ", LineNumber: 1, Date: created, Reason: 1, ReasonName: "не распознали сумму"}}}, nil
 		}
 		s.DeleteFunc = func(_ context.Context, r *statementdatav1.DeleteUploadRequest) (*statementdatav1.DeleteUploadResponse, error) {
 			if r.GetUploadId() != "u1" {
@@ -160,6 +163,7 @@ func scenarioImportUpload(t *testing.T, start starter) {
 				t.Errorf("raw header %+v", h)
 			}
 			var size int64
+			previousChunk := 0
 			for {
 				chunk, err := stream.Recv()
 				if errors.Is(err, io.EOF) {
@@ -171,6 +175,10 @@ func scenarioImportUpload(t *testing.T, start starter) {
 				if len(chunk.GetChunk()) > 256<<10 || chunk.GetHeader() != nil {
 					t.Error("chunk contract")
 				}
+				if previousChunk != 0 && previousChunk != 256<<10 {
+					t.Error("nonfinal chunk not coalesced")
+				}
+				previousChunk = len(chunk.GetChunk())
 				size += int64(len(chunk.GetChunk()))
 				received.Add(int64(len(chunk.GetChunk())))
 			}
@@ -528,5 +536,234 @@ func scenarioImportLifetime(t *testing.T, start starter) {
 		_ = resp.Body.Close()
 		await(t, cancelled, "importstreamcancellation")
 		cancel()
+	}
+}
+
+func scenarioImportUnknownReason(t *testing.T, start starter) {
+	b := start(t, nil)
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	route := "/v1/statements/unread-lines"
+	known := &statementdatav1.UnreadLine{UploadId: "u1", FileName: "raw.ofx", LineNumber: 1, Reason: statementdatav1.UnreadReason_UNREAD_REASON_BAD_AMOUNT, ReasonName: "не распознали сумму"}
+	for _, unknown := range []statementdatav1.UnreadReason{0, 999} {
+		wire := &statementdatav1.ListUnreadLinesResponse{Lines: []*statementdatav1.UnreadLine{known, {UploadId: "u1", FileName: "raw.ofx", LineNumber: 2, Reason: unknown, ReasonName: "подпись новой причины"}}}
+		b.peers.Statements.Set(func(s *testpeer.Statements) {
+			s.UnreadFunc = func(context.Context, *statementdatav1.ListUnreadLinesRequest) (*statementdatav1.ListUnreadLinesResponse, error) {
+				return wire, nil
+			}
+		})
+		r := b.do(t, request{method: "GET", path: route + "?upload_id=u1", route: route, header: auth})
+		if r.StatusCode != 200 || len(r.json["lines"].([]any)) != 2 || r.json["lines"].([]any)[1].(map[string]any)["reason"] != "unknown" || r.json["lines"].([]any)[1].(map[string]any)["reason_name"] != "подпись новой причины" {
+			t.Fatalf("unknown reason record was lost: %d %s", r.StatusCode, r.body)
+		}
+	}
+	b.peers.Statements.Set(func(s *testpeer.Statements) {
+		s.UnreadFunc = func(context.Context, *statementdatav1.ListUnreadLinesRequest) (*statementdatav1.ListUnreadLinesResponse, error) {
+			return &statementdatav1.ListUnreadLinesResponse{Lines: []*statementdatav1.UnreadLine{known}}, nil
+		}
+	})
+	r := b.do(t, request{method: "GET", path: route + "?upload_id=u1", route: route, header: auth})
+	if r.StatusCode != 200 || len(r.json["lines"].([]any)) != 1 || r.json["lines"].([]any)[0].(map[string]any)["reason_name"] != known.GetReasonName() {
+		t.Fatalf("known row changed: %d %s", r.StatusCode, r.body)
+	}
+}
+
+func scenarioImportEarlyLength(t *testing.T, start starter) {
+	b := start(t, nil)
+	access := b.keys.Access("u1")
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", b.public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err = conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = fmt.Fprintf(conn, "POST /v1/statements HTTP/1.1\r\nHost: %s\r\nX-Client-Version: %s\r\nAuthorization: Bearer %s\r\nIdempotency-Key: %s\r\nContent-Type: multipart/form-data; boundary=x\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", b.public, clientVersion, access, idemKey, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), "POST", "http://"+b.public+"/v1/statements", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		t.Fatalf("%v uploadCalls=%d logs=%s", err, len(b.peers.Calls(statementdatav1.StatementsService_UploadStatement_FullMethodName)), b.logs.text())
+	}
+	data, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := b.contract.Response(t, "POST", "/v1/statements", req, resp, data)
+	if resp.StatusCode != 413 || body["error"].(map[string]any)["code"] != "FILE_TOO_LARGE" || len(b.peers.Calls(statementdatav1.StatementsService_UploadStatement_FullMethodName)) != 0 {
+		t.Fatalf("declaredoversize: %d %s", resp.StatusCode, data)
+	}
+}
+
+func scenarioImportCapacity(t *testing.T, start starter) {
+	b := start(t, func(c *config.Config, _ *testpeer.Peers) {
+		c.API.Uploads = rest.StreamLimits{Max: 2, PerIP: 1, RetryAfter: time.Second}
+		c.API.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
+	})
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	b.peers.Statements.Set(func(s *testpeer.Statements) {
+		s.UploadFunc = func(stream grpc.ClientStreamingServer[statementdatav1.UploadStatementRequest, statementdatav1.UploadStatementResponse]) error {
+			first, err := stream.Recv()
+			if err != nil {
+				return err
+			}
+			for {
+				_, err = stream.Recv()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					return err
+				}
+			}
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-stream.Context().Done():
+				return stream.Context().Err()
+			}
+			return stream.SendAndClose(&statementdatav1.UploadStatementResponse{UploadId: "u1", FileName: first.GetHeader().GetFileName()})
+		}
+		s.WatchFunc = func(_ *statementdatav1.WatchUploadRequest, stream grpc.ServerStreamingServer[statementdatav1.WatchUploadResponse]) error {
+			return stream.Send(&statementdatav1.WatchUploadResponse{Event: &statementdatav1.WatchUploadResponse_Error{Error: &statementdatav1.ImportStreamError{Code: 2}}})
+		}
+	})
+	access := b.keys.Access("u1")
+	body, ct := multipartBody(t, "x.ofx", "x", false)
+	req := func(ip string) request {
+		return request{method: "POST", path: "/v1/statements", route: "/v1/statements", body: body, header: base(map[string]string{"Authorization": "Bearer " + access, "Idempotency-Key": idemKey, "Content-Type": ct, "X-Forwarded-For": ip})}
+	}
+	type outcome struct {
+		response response
+		err      error
+	}
+	first, second := make(chan outcome, 1), make(chan outcome, 1)
+	go func() { r, e := b.fetch(t.Context(), req("192.0.2.1")); first <- outcome{r, e} }()
+	await(t, entered, "firstupload")
+	checkBusy := func(ip string) {
+		before := len(b.peers.Calls(statementdatav1.StatementsService_UploadStatement_FullMethodName))
+		r := b.do(t, req(ip))
+		if r.StatusCode != 429 || errorCode(r) != "RATE_LIMITED" || r.json["error"].(map[string]any)["retryable"] != false || r.Header.Get("Retry-After") != "1" || len(b.peers.Calls(statementdatav1.StatementsService_UploadStatement_FullMethodName)) != before {
+			t.Fatalf("uploadbudget: %d %s", r.StatusCode, r.body)
+		}
+	}
+	checkBusy("192.0.2.1")
+	go func() { r, e := b.fetch(t.Context(), req("192.0.2.2")); second <- outcome{r, e} }()
+	await(t, entered, "secondupload")
+	checkBusy("192.0.2.3")
+	// Upload saturation cannot consume the independently configured SSE budget.
+	r := b.do(t, request{method: "GET", path: "/v1/statements/u1/progress", route: "/v1/statements/{upload_id}/progress", header: base(map[string]string{"Authorization": "Bearer " + access})})
+	if r.StatusCode != 200 {
+		t.Fatal("upload slots blocked SSE", r.StatusCode)
+	}
+	close(release)
+	for _, done := range []<-chan outcome{first, second} {
+		out := await(t, done, "completedupload")
+		if out.err != nil || out.response.StatusCode != 202 {
+			t.Fatal(out.response.StatusCode, out.err)
+		}
+	}
+	if r := b.do(t, req("192.0.2.1")); r.StatusCode != 202 {
+		t.Fatal("upload slot leaked", r.StatusCode, string(r.body))
+	}
+}
+
+func scenarioImportStreamingBeforeEOF(t *testing.T, start starter) {
+	b := start(t, nil)
+	headerSeen := make(chan struct{})
+	finishBody := make(chan struct{})
+	b.peers.Statements.Set(func(s *testpeer.Statements) {
+		s.UploadFunc = func(stream grpc.ClientStreamingServer[statementdatav1.UploadStatementRequest, statementdatav1.UploadStatementResponse]) error {
+			first, err := stream.Recv()
+			if err != nil {
+				return err
+			}
+			if first.GetHeader() == nil {
+				return finerr.ValidationError()
+			}
+			close(headerSeen)
+			for {
+				_, err = stream.Recv()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					return err
+				}
+			}
+			return stream.SendAndClose(&statementdatav1.UploadStatementResponse{UploadId: "u1", FileName: first.GetHeader().GetFileName()})
+		}
+	})
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close(); _ = writer.Close() }()
+	form := multipart.NewWriter(writer)
+	ct := form.FormDataContentType()
+	written := make(chan error, 1)
+	go func() {
+		part, err := form.CreateFormFile("file", "stream.ofx")
+		if err == nil {
+			select {
+			case <-finishBody:
+			case <-t.Context().Done():
+				written <- t.Context().Err()
+				return
+			}
+			_, err = part.Write([]byte("raw OFX bytes"))
+		}
+		if err == nil {
+			err = form.Close()
+		}
+		_ = writer.CloseWithError(err)
+		written <- err
+	}()
+	req, err := http.NewRequestWithContext(t.Context(), "POST", "http://"+b.public+"/v1/statements", reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("X-Client-Version", clientVersion)
+	req.Header.Set("Authorization", "Bearer "+b.keys.Access("u1"))
+	req.Header.Set("Idempotency-Key", idemKey)
+	type answer struct {
+		response response
+		err      error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		r, e := http.DefaultClient.Do(req)
+		if e != nil {
+			done <- answer{err: e}
+			return
+		}
+		defer func() { _ = r.Body.Close() }()
+		data, e := io.ReadAll(r.Body)
+		done <- answer{response: response{Response: r, body: data}, err: e}
+	}()
+	await(t, headerSeen, "gRPC header before HTTP body EOF")
+	close(finishBody)
+	if err := await(t, written, "finished multipart"); err != nil {
+		t.Fatal(err)
+	}
+	out := await(t, done, "streaming upload response")
+	if out.err != nil {
+		t.Fatal(out.err)
+	}
+	_ = b.contract.Response(t, "POST", "/v1/statements", req, out.response.Response, out.response.body)
+	if out.response.StatusCode != 202 {
+		t.Fatalf("%d %s", out.response.StatusCode, out.response.body)
 	}
 }

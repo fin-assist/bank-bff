@@ -42,6 +42,7 @@ type publicAPI struct {
 	statements *grpc.ClientConn
 	// streams is ended on shutdown, so draining does not wait for SSE until timeout.
 	streams *rest.StreamLimiter
+	uploads *rest.StreamLimiter
 }
 
 // newPublicAPI builds identity, peer connections and the routes. Nothing is fetched
@@ -112,6 +113,7 @@ func newPublicAPI(cfg config.Config, log *slog.Logger, reg prometheus.Registerer
 		return nil, err
 	}
 	api.streams = rest.NewStreamLimiter(a.Streams)
+	api.uploads = rest.NewStreamLimiter(a.Uploads)
 	deps := endpoint.Deps{
 		Auth: userv1.NewAuthServiceClient(api.user), Consents: userv1.NewConsentDocumentServiceClient(api.user),
 		Profile: userv1.NewProfileServiceClient(api.user), Assistant: assistantv1.NewAssistantServiceClient(api.assistant),
@@ -121,7 +123,7 @@ func newPublicAPI(cfg config.Config, log *slog.Logger, reg prometheus.Registerer
 	api.handler, err = rest.Handler(rest.Config{
 		Spec: spec, Gates: rest.Gates{Maintenance: a.Maintenance, MinVersions: a.MinVersions, Clock: o.clock},
 		BodyLimit: a.BodyLimit, Authenticate: auth.Middleware, Metrics: metrics,
-		Streams: api.streams, Log: log, Clock: o.clock, TrustedProxies: a.TrustedProxies,
+		Streams: api.streams, Uploads: api.uploads, Log: log, Clock: o.clock, TrustedProxies: a.TrustedProxies,
 	}, deps.Routes())
 	if err != nil {
 		return nil, err

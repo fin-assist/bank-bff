@@ -48,6 +48,8 @@ type Call struct {
 	Log *slog.Logger
 	// Streams limits concurrent SSE streams.
 	Streams *StreamLimiter
+	// Uploads has an independent capacity and shutdown scope from SSE.
+	Uploads *StreamLimiter
 	// Clock is "now" for fresh retry moments.
 	Clock func() time.Time
 	// replaySafe is established only by the validated route, never by the error reason or a UUID.
@@ -83,6 +85,7 @@ type Config struct {
 	Authenticate func(http.Handler) http.Handler
 	Metrics      *Metrics
 	Streams      *StreamLimiter
+	Uploads      *StreamLimiter
 	Log          *slog.Logger
 	Clock        func() time.Time
 	// TrustedProxies are the proxies whose X-Forwarded-For names the client.
@@ -186,7 +189,7 @@ func routeHandler(cfg Config, route Route, op apispec.Operation) http.Handler {
 			ctx = WithHints(ctx, h)
 		}
 		route.Handle(&Call{W: w, R: r.WithContext(ctx), Op: op, Body: body, Metrics: cfg.Metrics,
-			Log: cfg.Log, Streams: cfg.Streams, Clock: cfg.Clock,
+			Log: cfg.Log, Streams: cfg.Streams, Uploads: cfg.Uploads, Clock: cfg.Clock,
 			replaySafe: route.ReplaySafe && !route.Idempotent && op.Route != nil &&
 				r.Method == route.Method && op.Route.Method == route.Method && op.Route.Path == route.Path})
 	})

@@ -185,7 +185,7 @@ func newUnitAPI(t *testing.T, streams rest.StreamLimits) *unitAPI {
 	sf := &statementFakes{}
 	deps := Deps{Auth: f, Consents: f, Profile: f, Assistant: f, Statements: sf, Heartbeat: time.Millisecond, AnswerStream: time.Second, PhoneStream: time.Second}
 	h, err := rest.Handler(rest.Config{Spec: spec, BodyLimit: rest.MinBodyLimit, Metrics: metrics, Log: slog.New(slog.DiscardHandler), Clock: time.Now,
-		Streams: rest.NewStreamLimiter(streams), Gates: rest.Gates{MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}}, Clock: time.Now},
+		Streams: rest.NewStreamLimiter(streams), Uploads: rest.NewStreamLimiter(rest.StreamLimits{Max: 16, PerIP: 2, RetryAfter: time.Second}), Gates: rest.Gates{MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}}, Clock: time.Now},
 		Authenticate: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != goodToken {

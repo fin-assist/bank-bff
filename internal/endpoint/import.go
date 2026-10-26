@@ -67,7 +67,11 @@ func (d Deps) unreadLines(c *rest.Call) {
 		from, e1 := time.Parse(time.RFC3339Nano, q.Get("from"))
 		to, e2 := time.Parse(time.RFC3339Nano, q.Get("to"))
 		if e1 != nil || e2 != nil || !from.Before(to) {
-			rest.Validation(rest.Detail{Field: "from", Code: rest.DetailInvalidFormat, Message: "period must have from before to"}).Write(c.W)
+			field := "to"
+			if e1 != nil {
+				field = "from"
+			}
+			rest.Validation(rest.Detail{Field: field, Code: rest.DetailInvalidFormat, Message: "period must have from before to"}).Write(c.W)
 			return
 		}
 		req.Scope = &statementdatav1.ListUnreadLinesRequest_Period{Period: &commonv1.TimeRange{Start: timestamppb.New(from), End: timestamppb.New(to)}}
@@ -93,6 +97,18 @@ func importTooLarge(c *rest.Call) {
 }
 
 func (d Deps) uploadStatement(c *rest.Call) {
+	// The total wire upper bound is safe even though Content-Length includes the
+	// envelope. Reject it without opening an internal stream or reading the file.
+	if c.R.ContentLength > maxImportWireBytes {
+		importTooLarge(c)
+		return
+	}
+	release, ok := c.Uploads.Acquire(rest.HintsFrom(c.R.Context()).ClientIP)
+	if !ok {
+		c.Refuse(c.Uploads.Busy(c.Clock()), false)
+		return
+	}
+	defer release()
 	// A unary listener's read/write limits must not truncate a valid streaming upload.
 	if err := rest.ExtendDeadlines(c.W, time.Now().Add(UploadDeadline+streamWriteMargin)); err != nil {
 		rest.Internal().Write(c.W)
@@ -103,7 +119,7 @@ func (d Deps) uploadStatement(c *rest.Call) {
 		invalidImport(c, "expected multipart/form-data")
 		return
 	}
-	wire := &importWireReader{ReadCloser: http.MaxBytesReader(c.W, c.R.Body, maxImportWireBytes)}
+	wire := &importWireReader{ReadCloser: http.MaxBytesReader(c.W, c.R.Body, maxImportWireBytes), headerRemaining: maxImportEnvelopeBytes + 1}
 	c.R.Body = wire
 	reader := multipart.NewReader(c.R.Body, params["boundary"])
 	part, err := reader.NextRawPart()
@@ -111,6 +127,7 @@ func (d Deps) uploadStatement(c *rest.Call) {
 		invalidImport(c, "expected one file part")
 		return
 	}
+	wire.headerRemaining = -1 // Header parsing is complete; permit streamed file reads.
 	disposition, p, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
 	// FileName() calls filepath.Base and corrupts the hash identity; use the raw
 	// decoded MIME parameter instead, preserving Unicode, path, spaces and case.
@@ -129,6 +146,8 @@ func (d Deps) uploadStatement(c *rest.Call) {
 	}
 	ctx, cancel := context.WithTimeout(c.R.Context(), UploadDeadline)
 	defer cancel()
+	detach := c.Uploads.StopOnShutdown(cancel)
+	defer detach()
 	stream, err := d.Statements.UploadStatement(ctx)
 	if err != nil {
 		c.Fail(err)
@@ -141,7 +160,7 @@ func (d Deps) uploadStatement(c *rest.Call) {
 	buf := make([]byte, importChunkBytes)
 	var total int64
 	for {
-		n, readErr := part.Read(buf)
+		n, readErr := readImportChunk(part, buf)
 		total += int64(n)
 		if total > MaxImportFileBytes {
 			importTooLarge(c)
@@ -234,11 +253,38 @@ func (d Deps) watchUpload(c *rest.Call) {
 // importWireReader counts the whole MIME envelope separately from the file.
 type importWireReader struct {
 	io.ReadCloser
-	bytes int64
+	bytes           int64
+	headerRemaining int64
 }
 
 func (r *importWireReader) Read(p []byte) (int, error) {
+	if r.headerRemaining == 0 {
+		return 0, errors.New("multipart initial header exceeds budget")
+	}
+	if r.headerRemaining > 0 && int64(len(p)) > r.headerRemaining {
+		p = p[:int(r.headerRemaining)]
+	}
 	n, err := r.ReadCloser.Read(p)
+	if r.headerRemaining > 0 {
+		r.headerRemaining -= int64(n)
+	}
 	r.bytes += int64(n)
 	return n, err
+}
+
+// readImportChunk coalesces MIME reads while preserving the actual EOF/error.
+// ReadFull conflates a normal short tail with a truncated multipart boundary.
+func readImportChunk(reader io.Reader, buf []byte) (int, error) {
+	n := 0
+	for n < len(buf) {
+		count, err := reader.Read(buf[n:])
+		n += count
+		if err != nil {
+			return n, err
+		}
+		if count == 0 {
+			return n, io.ErrNoProgress
+		}
+	}
+	return n, nil
 }

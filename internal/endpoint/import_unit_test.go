@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -92,7 +93,7 @@ func TestUnitImportRoutesAndStreamingValidation(t *testing.T) {
 	r := &commonv1.TimeRange{Start: at, End: at}
 	f.config = &statementdatav1.GetImportConfigResponse{DownloadUrl: "https://bank.test", LoginUrl: "https://bank.test", MaxFileSizeBytes: MaxImportFileBytes, SuggestedPeriod: r, AcceptedFormats: []string{"OFX"}, Loaded: &statementdatav1.LoadedSummary{FirstOperationAt: at, LastOperationAt: at, OperationCount: 1}}
 	f.list = &statementdatav1.ListUploadsResponse{Summary: &statementdatav1.UploadsSummary{FirstOperationAt: at, LastOperationAt: at, Gaps: []*commonv1.TimeRange{r}}, Uploads: []*statementdatav1.Upload{{UploadId: "u1", UploadedAt: at, Status: 99, PeriodFrom: proto.String("2026-01-01"), PeriodTo: proto.String("2026-01-02"), ResolvedUnreadCount: 2, ResolvedByUploadedAt: at}, {UploadedAt: at, Status: 1, PeriodFrom: proto.String("2026-01-01")}}}
-	f.unread = &statementdatav1.ListUnreadLinesResponse{Lines: []*statementdatav1.UnreadLine{{Reason: 1, LineNumber: 1}, {Reason: 99}}}
+	f.unread = &statementdatav1.ListUnreadLinesResponse{Lines: []*statementdatav1.UnreadLine{{Reason: 1, LineNumber: 1}}}
 	for _, path := range []string{"/v1/statements/config", "/v1/statements", "/v1/statements/unread-lines?upload_id=u1", "/v1/statements/unread-lines?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z"} {
 		if got := u.serve(t, "GET", path, "", nil); got.Code != 200 {
 			t.Fatal(got.Code, got.Body.String())
@@ -134,7 +135,10 @@ func TestUnitImportRoutesAndStreamingValidation(t *testing.T) {
 			if !f.upload.closed || f.upload.sent[0].GetHeader().GetFileName() != tc.name {
 				t.Fatal("raw filename lost")
 			}
-			for _, p := range f.upload.sent[1:] {
+			for index, p := range f.upload.sent[1:] {
+				if index < len(f.upload.sent)-2 && len(p.GetChunk()) != importChunkBytes {
+					t.Fatal("nonfinal chunk not coalesced")
+				}
 				if len(p.GetChunk()) > importChunkBytes {
 					t.Fatal("oversized chunk")
 				}
@@ -205,5 +209,109 @@ func TestUnitImportProjectionAndCanonicalPrecedence(t *testing.T) {
 	u.statements.watch = []*statementdatav1.WatchUploadResponse{{Event: &statementdatav1.WatchUploadResponse_Complete{Complete: m}}}
 	if got := u.serve(t, http.MethodGet, "/v1/statements/u1/progress", "", nil); got.Code != 200 {
 		t.Fatal(got.Code)
+	}
+}
+
+func TestUnitUnknownUnreadReasonPreservesRecord(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	known := &statementdatav1.UnreadLine{UploadId: "u1", FileName: "x.ofx", LineNumber: 1, Reason: statementdatav1.UnreadReason_UNREAD_REASON_BAD_AMOUNT, ReasonName: "не распознали сумму"}
+	for _, unknown := range []statementdatav1.UnreadReason{0, 999} {
+		wire := &statementdatav1.ListUnreadLinesResponse{Lines: []*statementdatav1.UnreadLine{known, {UploadId: "u1", LineNumber: 2, Reason: unknown, ReasonName: "сохранённая подпись новой причины"}}}
+		before := proto.Clone(wire)
+		out := (converter{loc: time.UTC}).unread(wire)
+		if len(out.Lines) != 2 || out.Lines[1].Reason != "unknown" || out.Lines[1].ReasonName != wire.Lines[1].ReasonName || !proto.Equal(wire, before) {
+			t.Fatal("unknown reason record changed", out)
+		}
+		u.statements.unread = wire
+		r := u.serve(t, "GET", "/v1/statements/unread-lines?upload_id=u1", "", nil)
+		if r.Code != 200 || len(r.json["lines"].([]any)) != 2 || r.json["lines"].([]any)[1].(map[string]any)["reason"] != "unknown" {
+			t.Fatalf("%d %s", r.Code, r.Body.String())
+		}
+	}
+	families, err := u.reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, family := range families {
+		if family.GetName() != "finassist_untranslated_code_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := map[string]string{}
+			for _, l := range metric.Label {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["field"] != "UnreadLine.reason" || labels["code"] != "unknown" || metric.GetCounter().GetValue() != 2 {
+				t.Fatal("unexpected metric", metric)
+			}
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatal("missing bounded projection metric", seen)
+	}
+	u.statements.unread = &statementdatav1.ListUnreadLinesResponse{Lines: []*statementdatav1.UnreadLine{known}}
+	r := u.serve(t, "GET", "/v1/statements/unread-lines?upload_id=u1", "", nil)
+	if r.Code != 200 || r.json["lines"].([]any)[0].(map[string]any)["reason_name"] != known.GetReasonName() {
+		t.Fatal("known row changed", r.Body.String())
+	}
+}
+
+func TestUnitImportPeriodValidationDetailFields(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	for _, tc := range []struct{ query, field string }{{"from=bad&to=2026-02-01T00:00:00Z", "from"}, {"from=2026-01-01T00:00:00Z&to=bad", "to"}, {"from=2026-02-01T00:00:00Z&to=2026-01-01T00:00:00Z", "to"}} {
+		r := u.serve(t, "GET", "/v1/statements/unread-lines?"+tc.query, "", nil)
+		if r.Code != 400 {
+			t.Fatal(r.Code)
+		}
+		details := r.json["error"].(map[string]any)["details"].([]any)
+		if details[0].(map[string]any)["field"] != tc.field {
+			t.Fatal(tc, details)
+		}
+	}
+}
+
+type importReadCounter struct {
+	io.ReadCloser
+	bytes int
+}
+
+func (r *importReadCounter) Read(p []byte) (int, error) {
+	n, e := r.ReadCloser.Read(p)
+	r.bytes += n
+	return n, e
+}
+func TestUnitImportInitialHeaderReadBudget(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	u.statements.upload = &uploadFake{}
+	body, ct := unitMultipart(t, "x.ofx", "x", false)
+	body = strings.Replace(body, "Content-Disposition:", "X-Large: "+strings.Repeat("x", 1<<20)+"\r\nContent-Disposition:", 1)
+	req := httptest.NewRequest("POST", "/v1/statements", strings.NewReader(body))
+	counter := &importReadCounter{ReadCloser: req.Body}
+	req.Body = counter
+	req.Header.Set("X-Client-Version", "android/0.2.5+41")
+	req.Header.Set("Authorization", goodToken)
+	req.Header.Set("Idempotency-Key", testKey)
+	req.Header.Set("Content-Type", ct)
+	res := httptest.NewRecorder()
+	u.h.ServeHTTP(res, req)
+	if res.Code != 400 || counter.bytes > maxImportEnvelopeBytes+1 || len(u.statements.upload.sent) != 0 {
+		t.Fatalf("unbounded initial MIME header: status=%d bytes=%d sends=%d", res.Code, counter.bytes, len(u.statements.upload.sent))
+	}
+}
+
+type noProgressImportReader struct{}
+
+func (noProgressImportReader) Read([]byte) (int, error) { return 0, nil }
+func TestUnitImportChunkPreservesTailErrorAndBoundsZeroProgress(t *testing.T) {
+	buf := make([]byte, 8)
+	n, err := readImportChunk(strings.NewReader("abc"), buf)
+	if n != 3 || !errors.Is(err, io.EOF) {
+		t.Fatal(n, err)
+	}
+	n, err = readImportChunk(noProgressImportReader{}, buf)
+	if n != 0 || !errors.Is(err, io.ErrNoProgress) {
+		t.Fatal(n, err)
 	}
 }

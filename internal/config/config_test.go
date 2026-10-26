@@ -22,7 +22,7 @@ func TestUnitDefaultsAndOverrides(t *testing.T) {
 	}
 	a := cfg.API
 	if !a.Enabled || a.TrustedProxies != nil || a.BodyLimit != 65536 || a.Maintenance.Enabled || a.Maintenance.RetryAfter != 5*time.Minute || a.Streams.Max != 2000 || a.Streams.PerIP != 20 ||
-		a.Streams.RetryAfter != 10*time.Second || a.MinVersions["android"] != (rest.Version{"0", "2", "5"}) || a.UserAddr != "dns:///user:9090" {
+		a.Streams.RetryAfter != 10*time.Second || a.Uploads.Max != 16 || a.Uploads.PerIP != 2 || a.Uploads.RetryAfter != time.Second || a.MinVersions["android"] != (rest.Version{"0", "2", "5"}) || a.UserAddr != "dns:///user:9090" {
 		t.Fatalf("API defaults: %+v", a)
 	}
 	for _, env := range []string{"dev", "stage", "prod"} {
@@ -80,6 +80,7 @@ func TestUnitInvalidSettings(t *testing.T) {
 		{"CLIENT_MIN_VERSIONS", "android"}, {"CLIENT_MIN_VERSIONS", "Android=0.1.0"}, {"CLIENT_MIN_VERSIONS", "android=0.1"}, {"CLIENT_MIN_VERSIONS", "android=0.1.0,android=0.2.0"},
 		{"MAINTENANCE", "yes"}, {"MAINTENANCE_UNTIL", "tomorrow"}, {"MAINTENANCE_RETRY_AFTER", "0s"}, {"MAINTENANCE_RETRY_AFTER", "25h"}, {"MAINTENANCE_RETRY_AFTER", "x"},
 		{"JSON_BODY_LIMIT", "16384"}, {"JSON_BODY_LIMIT", "2097152"}, {"JSON_BODY_LIMIT", "x"},
+		{"UPLOAD_MAX_STREAMS", "0"}, {"UPLOAD_MAX_STREAMS", "x"}, {"UPLOAD_MAX_STREAMS_PER_IP", "0"}, {"UPLOAD_MAX_STREAMS_PER_IP", "17"}, {"UPLOAD_BUSY_RETRY_AFTER", "0s"}, {"UPLOAD_BUSY_RETRY_AFTER", "10m"},
 		{"SSE_MAX_STREAMS", "0"}, {"SSE_MAX_STREAMS", "x"}, {"SSE_MAX_STREAMS_PER_IP", "0"}, {"SSE_MAX_STREAMS_PER_IP", "2001"},
 		{"SSE_BUSY_RETRY_AFTER", "500ms"}, {"SSE_BUSY_RETRY_AFTER", "6m"},
 		{"TRUSTED_PROXIES", "127.0.0.1"}, {"TRUSTED_PROXIES", "10.0.0.0/8,nginx"},

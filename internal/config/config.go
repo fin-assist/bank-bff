@@ -44,6 +44,8 @@ type API struct {
 	BodyLimit int64
 	// Streams bound concurrent SSE streams.
 	Streams rest.StreamLimits
+	// Uploads bounds long POST requests independently from SSE.
+	Uploads rest.StreamLimits
 	// TrustedProxies are the networks whose X-Forwarded-For names the client address.
 	TrustedProxies []netip.Prefix
 }
@@ -91,6 +93,9 @@ var Vars = []Var{
 	{"MAINTENANCE_UNTIL", "", "Ожидаемое окончание техработ, RFC 3339; пусто — неизвестно"},
 	{"MAINTENANCE_RETRY_AFTER", "5m", "Retry-After техработ, пока окончание неизвестно или прошло; 1s–24h"},
 	{"JSON_BODY_LIMIT", "65536", "Предел JSON-тела запроса в байтах; 65536–1048576"},
+	{"UPLOAD_MAX_STREAMS", "16", "Предел одновременных загрузок процесса; отдельный от SSE"},
+	{"UPLOAD_MAX_STREAMS_PER_IP", "2", "Предел загрузок с одного адреса клиента"},
+	{"UPLOAD_BUSY_RETRY_AFTER", "1s", "Retry-After локального отказа загрузки; 1s–5m, original-request retryable=false"},
 	{"SSE_MAX_STREAMS", "2000", "Предел одновременных SSE-потоков процесса"},
 	{"SSE_MAX_STREAMS_PER_IP", "20", "Предел одновременных SSE-потоков с одного адреса клиента"},
 	{"SSE_BUSY_RETRY_AFTER", "10s", "Retry-After отказа 429 по пределу SSE-потоков; 1s–5m"},
@@ -188,6 +193,18 @@ func loadAPI(env string, v map[string]string) (API, []error) {
 	api.Streams.RetryAfter, err = time.ParseDuration(v["SSE_BUSY_RETRY_AFTER"])
 	if err != nil || api.Streams.RetryAfter < time.Second || api.Streams.RetryAfter > 5*time.Minute {
 		errs = append(errs, errors.New("SSE_BUSY_RETRY_AFTER must be between 1s and 5m"))
+	}
+	api.Uploads.Max, err = strconv.Atoi(v["UPLOAD_MAX_STREAMS"])
+	if err != nil || api.Uploads.Max < 1 || api.Uploads.Max > 100000 {
+		errs = append(errs, errors.New("UPLOAD_MAX_STREAMS must be between 1 and 100000"))
+	}
+	api.Uploads.PerIP, err = strconv.Atoi(v["UPLOAD_MAX_STREAMS_PER_IP"])
+	if err != nil || api.Uploads.PerIP < 1 || api.Uploads.PerIP > api.Uploads.Max {
+		errs = append(errs, errors.New("UPLOAD_MAX_STREAMS_PER_IP must be between 1 and UPLOAD_MAX_STREAMS"))
+	}
+	api.Uploads.RetryAfter, err = time.ParseDuration(v["UPLOAD_BUSY_RETRY_AFTER"])
+	if err != nil || api.Uploads.RetryAfter < time.Second || api.Uploads.RetryAfter > 5*time.Minute {
+		errs = append(errs, errors.New("UPLOAD_BUSY_RETRY_AFTER must be between 1s and 5m"))
 	}
 	for _, part := range strings.Split(v["TRUSTED_PROXIES"], ",") {
 		if part = strings.TrimSpace(part); part == "" {

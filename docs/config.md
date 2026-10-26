@@ -31,6 +31,9 @@
 | `MAINTENANCE_UNTIL` | — | Ожидаемое окончание техработ, RFC 3339; пусто — неизвестно |
 | `MAINTENANCE_RETRY_AFTER` | `5m` | Retry-After техработ, пока окончание неизвестно или прошло; 1s–24h |
 | `JSON_BODY_LIMIT` | `65536` | Предел JSON-тела запроса в байтах; 65536–1048576 |
+| `UPLOAD_MAX_STREAMS` | `16` | Предел одновременных загрузок процесса; отдельный от SSE |
+| `UPLOAD_MAX_STREAMS_PER_IP` | `2` | Предел загрузок с одного адреса клиента |
+| `UPLOAD_BUSY_RETRY_AFTER` | `1s` | Retry-After локального отказа загрузки; 1s–5m, original-request retryable=false |
 | `SSE_MAX_STREAMS` | `2000` | Предел одновременных SSE-потоков процесса |
 | `SSE_MAX_STREAMS_PER_IP` | `20` | Предел одновременных SSE-потоков с одного адреса клиента |
 | `SSE_BUSY_RETRY_AFTER` | `10s` | Retry-After отказа 429 по пределу SSE-потоков; 1s–5m |

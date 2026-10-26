@@ -90,6 +90,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Optio
 	publicServer := server(public, log, o)
 	if api != nil {
 		publicServer.RegisterOnShutdown(api.streams.Shutdown)
+		publicServer.RegisterOnShutdown(api.uploads.Shutdown)
 	}
 	return serve(ctx, cfg, log, readiness, keys,
 		boundServer{publicServer, publicListener},

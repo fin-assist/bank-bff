@@ -65,6 +65,7 @@ func apiConfig(stage testpeer.StageFiles) config.Config {
 			MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}},
 			Maintenance: rest.Maintenance{RetryAfter: 5 * time.Minute},
 			BodyLimit:   rest.MinBodyLimit,
+			Uploads:     rest.StreamLimits{Max: 16, PerIP: 2, RetryAfter: time.Second},
 			Streams:     rest.StreamLimits{Max: 100, PerIP: 10, RetryAfter: 10 * time.Second},
 		},
 	}
@@ -232,6 +233,7 @@ func startAssembly(t *testing.T, mutate func(*config.Config, *testpeer.Peers), o
 	srv := httptest.NewUnstartedServer(api.handler)
 	srv.Config = server(api.handler, log, o)
 	srv.Config.RegisterOnShutdown(api.streams.Shutdown)
+	srv.Config.RegisterOnShutdown(api.uploads.Shutdown)
 	srv.Start()
 	b := &bff{peers: peers, contract: testpeer.LoadContract(t), keys: keys, logs: logs, public: srv.Listener.Addr().String()}
 	var once sync.Once

@@ -20,3 +20,7 @@ CI также запускает lint и сборку distroless/nonroot обр�
 Для Python regression-тестов workflow нужен Node.js 20+ (`node` в PATH). Проверяется реальный read-only JS gate: fork/удалённый head/чужая base/закрытый PR/ошибка API не могут включить write-enabled job; отдельные issues не запускают ревью.
 
 FIN-342: сценарии ImportRead/ImportUpload/ImportWatch/ImportErrors запускаются на обеих транспортных сборках. Проверяются все шесть маршрутов, raw имя и чанки, предел файла и формы, отсутствие финализации неверной формы, ID/токены/metadata, взаимоисключающие фильтры, enum fallback, Status presence/invalid/unknown, safe catalog, конечные события и transport-close без выдуманного результата. Хранилище и парсер проверяются в bank-statement-data отдельно.
+
+ImportUnknownReason проверяет обязательный reason: UNSPECIFIED и неизвестное число сохраняют всю строку и reason_name с транспортным reason=unknown; известные reason/reason_name возвращаются без изменения. Unit дополнительно проверяет одну ограниченную серию метрики unknown и отсутствие изменения protobuf-ответа сервиса.
+
+ImportEarlyLength отправляет только HTTP-заголовки с Content-Length 1 ГиБ и получает 413 без RPC. ImportStreamingBeforeEOF доказывает отправку gRPC header до завершения HTTP-тела. ImportCapacity проверяет независимые global/per-IP upload лимиты, отсутствие RPC при 429, retryable=false, свободный SSE и освобождение ёмкости. UnitInitialHeaderReadBudget ограничивает фактические прочитанные байты большого MIME-заголовка; чанки, усечённая граница и отсутствие прогресса проверяются отдельно.
