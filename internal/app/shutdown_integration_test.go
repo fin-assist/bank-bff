@@ -33,7 +33,7 @@ func TestIntegrationShutdownDeadlineClosesActiveRequest(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, config.Config{ShutdownTimeout: 20 * time.Millisecond}, log, readiness, boundServer{server(handler, log), public}, boundServer{server(ops.Handler(readiness), log), operational})
+		done <- serve(ctx, config.Config{ShutdownTimeout: 20 * time.Millisecond}, log, readiness, noKeys, boundServer{server(handler, log, defaults()), public}, boundServer{server(ops.Handler(readiness, ops.NewRegistry()), log, defaults()), operational})
 	}()
 	requestDone := make(chan struct{})
 	go func() {

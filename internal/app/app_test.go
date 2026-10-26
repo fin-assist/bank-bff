@@ -45,6 +45,8 @@ func (s *fakeServer) Shutdown(ctx context.Context) error {
 }
 func (s *fakeServer) Close() error { s.once.Do(func() { close(s.stop) }); return s.closeErr }
 
+func noKeys(context.Context) {}
+
 func TestUnitLifecycle(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(map[bool]string{false: "cancellation", true: "listener-failure"}[fail], func(t *testing.T) {
@@ -61,14 +63,14 @@ func TestUnitLifecycle(t *testing.T) {
 					t.Error("shutdown context is unbounded")
 				}
 				res := httptest.NewRecorder()
-				ops.Handler(r).ServeHTTP(res, httptest.NewRequest("GET", "/readyz", nil))
+				ops.Handler(r, ops.NewRegistry()).ServeHTTP(res, httptest.NewRequest("GET", "/readyz", nil))
 				if res.Code != http.StatusServiceUnavailable {
 					t.Errorf("shutdown readiness: %d", res.Code)
 				}
 			}
 			done := make(chan error, 1)
 			go func() {
-				done <- serve(ctx, config.Config{ShutdownDelay: time.Millisecond, ShutdownTimeout: time.Second}, slog.New(slog.DiscardHandler), r, a, b)
+				done <- serve(ctx, config.Config{ShutdownDelay: time.Millisecond, ShutdownTimeout: time.Second}, slog.New(slog.DiscardHandler), r, noKeys, a, b)
 			}()
 			<-a.started
 			<-b.started
@@ -95,7 +97,7 @@ func TestUnitShutdownErrorsPreserved(t *testing.T) {
 	b.closeErr = closeFailure
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err := serve(ctx, config.Config{ShutdownTimeout: time.Second}, slog.New(slog.DiscardHandler), &ops.Readiness{}, a, b)
+	err := serve(ctx, config.Config{ShutdownTimeout: time.Second}, slog.New(slog.DiscardHandler), &ops.Readiness{}, noKeys, a, b)
 	if !errors.Is(err, failure) || !errors.Is(err, closeFailure) {
 		t.Fatal(err)
 	}
@@ -104,7 +106,7 @@ func TestUnitShutdownErrorsPreserved(t *testing.T) {
 func TestUnitHTTPServerLimitsAndNoDefaultMux(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := http.NewServeMux()
-	s := server(h, log)
+	s := server(h, log, options{readTimeout: 10 * time.Second, writeTimeout: 30 * time.Second})
 	if s.Handler != h || s.ReadHeaderTimeout != 5*time.Second || s.ReadTimeout != 10*time.Second || s.WriteTimeout != 30*time.Second || s.IdleTimeout != 60*time.Second || s.MaxHeaderBytes != 1<<20 || s.ErrorLog == nil {
 		t.Fatalf("server: %+v", s)
 	}

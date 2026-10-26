@@ -9,7 +9,7 @@ import (
 
 func TestUnitOperationalEndpoints(t *testing.T) {
 	r := &Readiness{}
-	h := Handler(r)
+	h := Handler(r, NewRegistry())
 	for _, tc := range []struct {
 		method, path string
 		ready        bool

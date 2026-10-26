@@ -165,8 +165,16 @@ jobs:
           grep -q 'usage:' <<< "$output"
       - name: HTTP image smoke test
         run: |
+          # The default ENV=prod needs peers and identity (FIN-268): without them start fails closed.
+          set +e
+          docker run --rm bank-bff:ci serve > prod.log 2>&1
+          status=$?
+          set -e
+          test "$status" = 1
+          grep -q USER_GRPC_ADDR prod.log
+          # ENV=dev serves the listeners without the public API.
           trap 'docker rm -f bank-bff-smoke >/dev/null 2>&1 || true' EXIT
-          docker run -d --name bank-bff-smoke -e SHUTDOWN_DELAY=0s \
+          docker run -d --name bank-bff-smoke -e ENV=dev -e SHUTDOWN_DELAY=0s \
             -p 127.0.0.1::8080 -p 127.0.0.1::9091 bank-bff:ci
           public=$(docker port bank-bff-smoke 8080/tcp)
           operational=$(docker port bank-bff-smoke 9091/tcp)

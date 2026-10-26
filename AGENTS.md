@@ -2,14 +2,22 @@
 
 `bank-bff` is the stateless HTTP backend for frontend of «Понятные финансы», adapted from
 `fin-assist/go-service-template` main 6ea35ce (FIN-246) in FIN-261. Read README.md first.
-The public mux currently has no business routes. Do not invent REST fields, RPCs or error codes.
+FIN-268 (FIN-331) serves 14 public REST/SSE operations of auth, consents, profile reads/assistant
+consent and the assistant (docs/server.md); every other contract operation answers 404 until its task.
+Do not invent REST fields, RPCs or error codes.
 Contracts live in `fin-assist/contracts`: docs/api.md, openapi/openapi.yaml, docs/grpc-api.md.
 The owner's latest decision and contracts take precedence over copied template assumptions.
 
 ## Repository map
 
 - cmd/bank-bff: serve command, logger, exit status, SIGINT/SIGTERM.
-- internal/app: explicit assembly of public and operational HTTP listeners and bounded shutdown.
+- internal/app: explicit assembly of public and operational HTTP listeners and bounded shutdown;
+  api.go builds the public API (embedded contract, go-identity Assembly, go-grpc peers) before bind.
+- internal/rest: request ID, gates (MAINTENANCE, X-Client-Version), auth, body limit and kin-openapi
+  validation, finerr.ToREST translation, SSE pump/limits, metrics and access log.
+- internal/endpoint: the 14 operations, REST <-> gRPC conversion; internal/catalog: user_message and
+  severity texts (FIN-225); internal/apispec: embedded openapi.yaml copy with its contracts commit.
+- internal/testpeer: test infrastructure only — bufconn fakes of user/assistant, keys, contract checks.
 - internal/config: all environment settings in Vars; docs/config.md table is checked by tests.
 - internal/ops: private health/readiness and Prometheus Go/process metrics.
 - docs/server.md and docs/testing.md: lifecycle and test scope.
@@ -23,7 +31,10 @@ Use standard library net/http, slog, errors and testing; no frameworks, ORM, DI 
 third party logger or assertion/mocking library. A dependency needs a concrete reason in the PR.
 Small interfaces are owned by their consumer, with explicit wiring. Usecases do not import adapters.
 Shared Go infrastructure belongs in tagged fin-assist libraries; do not copy their internals.
-Stateless BFF has no PostgreSQL, migration command, incoming gRPC server or background jobs.
+Stateless BFF has no PostgreSQL, migration command, incoming gRPC server or business jobs. The only
+background loop is go-identity Assembly.Run key refresh, started after bind and stopped with listeners.
+ENV=dev builds no public API (NewAssembly refuses dev): no auth bypass. Pre-stream SSE failures are
+JSON; streams extend their own connection deadlines and have their own deadline and caps.
 Add an infrastructure dependency only for a real endpoint/usecase; no dummy code for coverage.
 
 ## Security
@@ -63,9 +74,11 @@ applicable. Peer services use transport fixtures on bufconn, not mocked generate
 FIN-238: each of unit/integration/API independently requires >=80% statements of the same whole
 production module, using pinned go-test-coverage v2.20.1 with agreed 79.95% -> 80.0% rounding.
 No excluded packages/helpers/generated files for percentages. Combined is informational only.
-Test names start TestUnit…, TestIntegration… or TestAPI…; make test-names checks race-enabled
-inventory before each collector. Existing jq guards reject empty/skipped/failed suites and absent,
-empty, header-only or zero-statement profiles. Missing coverage fails required go; no service N/A.
+Test names start TestUnit…, TestIntegration… or TestAPI… (fuzz targets FuzzUnit… etc.); make test-names
+checks race-enabled Test/Fuzz/Example inventory before each collector and rejects Example (FIN-290).
+Integration and API share the scenarios of internal/app/scenarios_test.go: integration assembles
+newPublicAPI behind httptest, API runs app.Run; every response is validated with testpeer.Contract.
+Existing jq guards reject empty/skipped/failed suites and absent, empty, header-only or zero-statement profiles. Missing coverage fails required go; no service N/A.
 Network/TCP tests must actually bind and exchange HTTP; permission errors are failures, not skips.
 This stateless scaffold requires no PostgreSQL. Future real database functionality must use real
 PostgreSQL18 for integration/API tests and must not turn missing dependencies into successful skips.
@@ -93,5 +106,6 @@ Security: authorization boundaries, private operational listener, no data leakag
 shutdown, startup failure cleanup, trusted metadata, safe CI and fork permissions.
 Tests: meaningful behavior coverage at all three levels; real HTTP API and transport dependencies;
 negative startup/shutdown scenarios; unchanged strict guards and independent total80.
-No business REST/SSE or database functionality is part of FIN-261. Do not require absent business
-handlers solely to increase coverage, and do not treat passing scaffold tests as implemented APIs.
+Only the 14 FIN-268 operations exist; do not require absent handlers solely to increase coverage, and do
+not treat passing tests as implementing unimplemented contract operations. Each served operation needs
+API tests for success, its declared errors, token, Idempotency-Key, schema, client version and SSE.

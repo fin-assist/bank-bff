@@ -1,4 +1,8 @@
-# Example for the stand; no database or migration command is needed.
+# Example for the stand; no database or migration command is needed. ENV=stage serves the
+# public API (FIN-268): the env file must set USER_GRPC_ADDR, ASSISTANT_GRPC_ADDR, AUTH_USER_ISSUER,
+# AUTH_USER_AUDIENCE, CLIENT_MIN_VERSIONS and the AUTH_STAGE_* files (docs/config.md), or start fails.
+# Behind the local nginx it should set TRUSTED_PROXIES=127.0.0.1/32 so that X-Forwarded-For of
+# that nginx gives the client address; without it every client has the nginx address.
 [Unit]
 Description=fin-assist bank-bff
 After=network-online.target
@@ -29,7 +33,7 @@ Environment=HTTP_ADDR=127.0.0.1:9091
 # must succeed (a 404 still exits 0 without -f) and fail with -p IPAddressDeny=any added.
 # If the control probe fails, the pair proves nothing; if the deny probe passes, eBPF is
 # missing or a slice allows the traffic. Check the binding with `ss -ltn`.
-# Future outgoing peer calls (gRPC services) need explicit IPAddressAllow entries.
+# Outgoing gRPC calls to user and assistant on other hosts need explicit IPAddressAllow entries.
 IPAddressAllow=localhost
 IPAddressDeny=any
 DynamicUser=yes

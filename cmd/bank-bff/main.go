@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	_ "time/tzdata" // IANA zones of responses, independent of the image
 
 	"github.com/fin-assist/bank-bff/internal/app"
 	"github.com/fin-assist/bank-bff/internal/config"
