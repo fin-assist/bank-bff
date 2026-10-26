@@ -185,3 +185,48 @@ func TestUnitMalformedRetryStatusCannotAuthorizeRequest(t *testing.T) {
 		t.Fatal("explicit false lost its presence")
 	}
 }
+
+func TestUnitHandlerRefusalRequiresPermissionAndWholeRequestProof(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, body      string
+		safe, keyed, permission, want bool
+	}{
+		{"temporary admission", "GET", "/v1/auth/phone/events", "", true, false, true, true},
+		{"no handler permission", "GET", "/v1/auth/phone/events", "", true, false, false, false},
+		{"no operation proof", "GET", "/v1/auth/phone/events", "", false, false, true, false},
+		{"unknown key window", "POST", "/v1/auth/token", `{"refresh_token":"token"}`, true, true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := handlerConfig(t)
+			calls := 0
+			handler, err := Handler(cfg, []Route{{Method: tc.method, Path: tc.path, ReplaySafe: tc.safe, Idempotent: tc.keyed, Handle: func(c *Call) { calls++; c.Refuse(c.Streams.Busy(c.Clock()), tc.permission) }}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("X-Client-Version", "android/0.2.5+41")
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			req.Header.Set("Idempotency-Key", "0190c3a0-1b2c-7d3e-8f40-123456789abc")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			result := retryFlag(t, w, tc.want)
+			if calls != 1 || w.Code != 429 || result.Code != "RATE_LIMITED" || result.RetryAt == "" || w.Header().Get("Retry-After") != "1" || w.Header().Get("Content-Type") != "application/json" {
+				t.Fatal(calls, w.Code, w.Header(), w.Body.String())
+			}
+		})
+	}
+	// Neither a catalog-known refusal nor a pre-populated flag grants a declaration-less Call permission.
+	flag := true
+	w := httptest.NewRecorder()
+	(&Call{W: w}).Refuse(Error{Status: 429, Code: "RATE_LIMITED", Retryable: &flag}, true)
+	retryFlag(t, w, false)
+	// Even a proven call cannot derive permission from the catalog or an earlier flag.
+	w = httptest.NewRecorder()
+	(&Call{W: w, replaySafe: true}).Refuse(Error{Status: 429, Code: "RATE_LIMITED", Retryable: &flag}, false)
+	retryFlag(t, w, false)
+	w = httptest.NewRecorder()
+	Validation().Write(w)
+	retryFlag(t, w, false)
+}

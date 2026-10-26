@@ -55,11 +55,19 @@ type Call struct {
 // when service permission and the validated whole-operation safety declaration agree.
 func (c *Call) Fail(err error) {
 	e := c.Metrics.FromGRPC(err, c.Op.Statuses)
-	allowed := c.replaySafe && e.serviceRequestRetryable != nil && *e.serviceRequestRetryable
-	e.Retryable = &allowed
 	if e.Code == "INTERNAL_ERROR" {
 		c.Log.WarnContext(c.R.Context(), "internal call failed", "grpc_code", codeOf(err))
 	}
+	c.Refuse(e, e.serviceRequestRetryable != nil && *e.serviceRequestRetryable)
+}
+
+// Refuse sends a handler-owned refusal. retryAllowed is the transport handler's
+// explicit permission to repeat this original request, not a permission inferred
+// from the error code, catalog, status or wait. It grants retry only together with
+// the validated route's proof of safety for the entire external operation.
+func (c *Call) Refuse(e Error, retryAllowed bool) {
+	allowed := retryAllowed && c.replaySafe
+	e.Retryable = &allowed
 	e.Write(c.W)
 }
 
