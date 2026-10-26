@@ -99,3 +99,16 @@ func AnswerCodes() []string {
 	}
 	return codes
 }
+
+// Import returns safe presentation of a terminal import error, independent of
+// original-request retry permission. Unknown result reasons remain open.
+func Import(code string) (Entry, bool) {
+	switch code {
+	case "PROCESSING_FAILED":
+		return Entry{"Не получилось обработать выписку. Попробуйте загрузить её снова.", Error, "Import failed"}, true
+	case "CANCELLED":
+		return Entry{"Загрузка отменена.", Info, "Import cancelled"}, true
+	default:
+		return Entry{"Не получилось обработать выписку. Попробуйте загрузить её снова.", Error, "Import failed"}, false
+	}
+}

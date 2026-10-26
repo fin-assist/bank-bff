@@ -1,0 +1,209 @@
+package endpoint
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
+	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
+	"github.com/fin-assist/contracts/gen/go/finerr"
+	statuspb "google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/fin-assist/bank-bff/internal/rest"
+)
+
+type statementFakes struct {
+	StatementsClient
+	config *statementdatav1.GetImportConfigResponse
+	list   *statementdatav1.ListUploadsResponse
+	unread *statementdatav1.ListUnreadLinesResponse
+	watch  []*statementdatav1.WatchUploadResponse
+	err    error
+	input  *statementdatav1.ListUnreadLinesRequest
+	upload *uploadFake
+}
+
+func (f *statementFakes) GetImportConfig(context.Context, *statementdatav1.GetImportConfigRequest, ...grpc.CallOption) (*statementdatav1.GetImportConfigResponse, error) {
+	return f.config, f.err
+}
+func (f *statementFakes) ListUploads(context.Context, *statementdatav1.ListUploadsRequest, ...grpc.CallOption) (*statementdatav1.ListUploadsResponse, error) {
+	return f.list, f.err
+}
+func (f *statementFakes) ListUnreadLines(_ context.Context, r *statementdatav1.ListUnreadLinesRequest, _ ...grpc.CallOption) (*statementdatav1.ListUnreadLinesResponse, error) {
+	f.input = r
+	return f.unread, f.err
+}
+func (f *statementFakes) DeleteUpload(context.Context, *statementdatav1.DeleteUploadRequest, ...grpc.CallOption) (*statementdatav1.DeleteUploadResponse, error) {
+	return &statementdatav1.DeleteUploadResponse{}, f.err
+}
+func (f *statementFakes) WatchUpload(ctx context.Context, _ *statementdatav1.WatchUploadRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[statementdatav1.WatchUploadResponse], error) {
+	return &fakeStream[statementdatav1.WatchUploadResponse]{ctx: ctx, msgs: f.watch}, f.err
+}
+func (f *statementFakes) UploadStatement(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[statementdatav1.UploadStatementRequest, statementdatav1.UploadStatementResponse], error) {
+	return f.upload, f.err
+}
+
+type uploadFake struct {
+	grpc.ClientStream
+	sent            []*statementdatav1.UploadStatementRequest
+	err, receiveErr error
+	closed          bool
+}
+
+func (f *uploadFake) Send(r *statementdatav1.UploadStatementRequest) error {
+	f.sent = append(f.sent, proto.Clone(r).(*statementdatav1.UploadStatementRequest))
+	return f.err
+}
+func (f *uploadFake) CloseAndRecv() (*statementdatav1.UploadStatementResponse, error) {
+	f.closed = true
+	return &statementdatav1.UploadStatementResponse{UploadId: "u1", FileName: f.sent[0].GetHeader().GetFileName()}, f.receiveErr
+}
+func (f *uploadFake) RecvMsg(any) error { return f.receiveErr }
+
+func unitMultipart(t *testing.T, name, body string, extra bool) (string, string) {
+	t.Helper()
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	part, err := w.CreateFormFile("file", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte(body))
+	if extra {
+		_ = w.WriteField("extra", "x")
+	}
+	_ = w.Close()
+	return b.String(), w.FormDataContentType()
+}
+func TestUnitImportRoutesAndStreamingValidation(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	f := u.statements
+	at := timestamppb.New(time.Now())
+	r := &commonv1.TimeRange{Start: at, End: at}
+	f.config = &statementdatav1.GetImportConfigResponse{DownloadUrl: "https://bank.test", LoginUrl: "https://bank.test", MaxFileSizeBytes: MaxImportFileBytes, SuggestedPeriod: r, AcceptedFormats: []string{"OFX"}, Loaded: &statementdatav1.LoadedSummary{FirstOperationAt: at, LastOperationAt: at, OperationCount: 1}}
+	f.list = &statementdatav1.ListUploadsResponse{Summary: &statementdatav1.UploadsSummary{FirstOperationAt: at, LastOperationAt: at, Gaps: []*commonv1.TimeRange{r}}, Uploads: []*statementdatav1.Upload{{UploadId: "u1", UploadedAt: at, Status: 99, PeriodFrom: proto.String("2026-01-01"), PeriodTo: proto.String("2026-01-02"), ResolvedUnreadCount: 2, ResolvedByUploadedAt: at}, {UploadedAt: at, Status: 1, PeriodFrom: proto.String("2026-01-01")}}}
+	f.unread = &statementdatav1.ListUnreadLinesResponse{Lines: []*statementdatav1.UnreadLine{{Reason: 1, LineNumber: 1}, {Reason: 99}}}
+	for _, path := range []string{"/v1/statements/config", "/v1/statements", "/v1/statements/unread-lines?upload_id=u1", "/v1/statements/unread-lines?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z"} {
+		if got := u.serve(t, "GET", path, "", nil); got.Code != 200 {
+			t.Fatal(got.Code, got.Body.String())
+		}
+	}
+	if f.input.GetPeriod() == nil {
+		t.Fatal("period lost")
+	}
+	for _, q := range []string{"", "upload_id=u1&from=2026-01-01T00:00:00Z", "from=2026-02-01T00:00:00Z&to=2026-01-01T00:00:00Z"} {
+		if got := u.serve(t, "GET", "/v1/statements/unread-lines?"+q, "", nil); got.Code != 400 {
+			t.Fatal(got.Code)
+		}
+	}
+	if got := u.serve(t, "DELETE", "/v1/statements/u1", "", nil); got.Code != 204 {
+		t.Fatal(got.Code)
+	}
+	f.err = finerr.NotFound()
+	for _, path := range []string{"/v1/statements/config", "/v1/statements", "/v1/statements/unread-lines?upload_id=u1", "/v1/statements/u1/progress"} {
+		if got := u.serve(t, "GET", path, "", nil); got.Code < 400 {
+			t.Fatal(got.Code)
+		}
+	}
+	if got := u.serve(t, "DELETE", "/v1/statements/u1", "", nil); got.Code != 404 {
+		t.Fatal(got.Code)
+	}
+	f.err = nil
+	for _, tc := range []struct {
+		name, body string
+		extra      bool
+		want       int
+	}{{"../ X.ofx ", strings.Repeat("x", 300<<10), false, 202}, {"a", "x", true, 400}, {"a", strings.Repeat("x", int(MaxImportFileBytes)+1), false, 413}} {
+		f.upload = &uploadFake{}
+		body, ct := unitMultipart(t, tc.name, tc.body, tc.extra)
+		got := u.serve(t, "POST", "/v1/statements", body, map[string]string{"Content-Type": ct})
+		if got.Code != tc.want {
+			t.Fatalf("%d %s", got.Code, got.Body.String())
+		}
+		if tc.want == 202 {
+			if !f.upload.closed || f.upload.sent[0].GetHeader().GetFileName() != tc.name {
+				t.Fatal("raw filename lost")
+			}
+			for _, p := range f.upload.sent[1:] {
+				if len(p.GetChunk()) > importChunkBytes {
+					t.Fatal("oversized chunk")
+				}
+			}
+		} else if f.upload.closed {
+			t.Fatal("invalid multipart finalized")
+		}
+	}
+	for _, tc := range []struct{ body, ct string }{{"x", "application/json"}, {"x", "multipart/form-data"}, {"x", "multipart/form-data; boundary=x"}} {
+		if got := u.serve(t, "POST", "/v1/statements", tc.body, map[string]string{"Content-Type": tc.ct}); got.Code != 400 {
+			t.Fatal(got.Code)
+		}
+	}
+	body, ct := unitMultipart(t, "a", "x", false)
+	for _, failure := range []error{finerr.WrongBank(), io.EOF} {
+		f.upload = &uploadFake{err: failure, receiveErr: finerr.FileTooLarge()}
+		got := u.serve(t, "POST", "/v1/statements", body, map[string]string{"Content-Type": ct})
+		want := 422
+		if errors.Is(failure, io.EOF) {
+			want = 413
+		}
+		if got.Code != want {
+			t.Fatal(got.Code, got.Body.String())
+		}
+	}
+	f.upload = &uploadFake{receiveErr: finerr.WrongFormat()}
+	if got := u.serve(t, "POST", "/v1/statements", body, map[string]string{"Content-Type": ct}); got.Code != 422 {
+		t.Fatal(got.Code)
+	}
+	f.err = finerr.FileTooLarge()
+	if got := u.serve(t, "POST", "/v1/statements", body, map[string]string{"Content-Type": ct}); got.Code != 413 {
+		t.Fatal(got.Code)
+	}
+}
+
+func TestUnitImportProjectionAndCanonicalPrecedence(t *testing.T) {
+	c := converter{loc: time.UTC}
+	at := timestamppb.Now()
+	r := &commonv1.TimeRange{Start: at, End: at}
+	features := []*statementdatav1.FeatureAvailability{}
+	for i := int32(1); i <= 7; i++ {
+		features = append(features, &statementdatav1.FeatureAvailability{Feature: statementdatav1.Feature(i), Open: i < 3, RequiredFullMonths: proto.Int32(12)})
+	}
+	features = append(features, &statementdatav1.FeatureAvailability{Feature: 2, RequiredMonthsWithData: proto.Int32(2)}, &statementdatav1.FeatureAvailability{Feature: 99})
+	m := &statementdatav1.ImportResult{Accounts: []*statementdatav1.ImportAccount{{TypeName: "Текущий", Mask: proto.String("··12")}}, Totals: &statementdatav1.ImportTotals{Scope: 1, ExpenseMinor: -11}, Coverage: &statementdatav1.ImportCoverage{Features: features, IncompleteMonths: []*statementdatav1.IncompleteMonth{{Month: "2026-01", Range: r, DataFrom: at, DataTo: at, Gaps: []*commonv1.TimeRange{r}}}}, Notices: []statementdatav1.ImportNotice{1, 2, 99}}
+	out := c.importResult(m)
+	if out.Currency != "RUB" || out.Totals.Expense != -11 || len(out.Coverage.Features) != 8 || len(out.Notices) != 2 {
+		t.Fatalf("%+v", out)
+	}
+	m.Totals.Scope = 99
+	if c.importResult(m).Totals.Scope != "unknown" {
+		t.Fatal("invented known scope")
+	}
+	for _, tc := range []struct {
+		wire   *statuspb.Status
+		legacy statementdatav1.ImportErrorCode
+		want   string
+	}{{nil, 2, "CANCELLED"}, {nil, 99, "PROCESSING_FAILED"}, {&statuspb.Status{}, 2, "PROCESSING_FAILED"}, {answerStatus(t, "FUTURE_IMPORT"), 2, "FUTURE_IMPORT"}, {answerStatus(t, "PROCESSING_FAILED"), 2, "PROCESSING_FAILED"}} {
+		e := c.importError(&statementdatav1.ImportStreamError{Status: tc.wire, Code: tc.legacy, Message: "SECRET"})
+		if e.Code != tc.want || strings.Contains(e.Message, "SECRET") {
+			t.Fatal(e)
+		}
+	}
+	for _, event := range []*statementdatav1.WatchUploadResponse{{}, {Event: &statementdatav1.WatchUploadResponse_Progress{Progress: &statementdatav1.ImportProgress{Stage: 99, Percent: 1}}}, {Event: &statementdatav1.WatchUploadResponse_Complete{Complete: m}}, {Event: &statementdatav1.WatchUploadResponse_Error{Error: &statementdatav1.ImportStreamError{Code: 2}}}} {
+		_, _, _, _ = c.importEvent(event)
+	}
+	u := newUnitAPI(t, rest.StreamLimits{})
+	u.statements.watch = []*statementdatav1.WatchUploadResponse{{Event: &statementdatav1.WatchUploadResponse_Complete{Complete: m}}}
+	if got := u.serve(t, http.MethodGet, "/v1/statements/u1/progress", "", nil); got.Code != 200 {
+		t.Fatal(got.Code)
+	}
+}

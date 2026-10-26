@@ -14,6 +14,7 @@
 | `SHUTDOWN_TIMEOUT` | `20s` | Общий предел graceful shutdown обоих listeners |
 | `USER_GRPC_ADDR` | — | gRPC-адрес сервиса user (`dns:///user.finassist.svc.cluster.local:9090`); обязателен в stage/prod |
 | `ASSISTANT_GRPC_ADDR` | — | gRPC-адрес сервиса assistant; обязателен в stage/prod |
+| `STATEMENTS_GRPC_ADDR` | — | gRPC-адрес bank-statement-data для шести RPC импорта; обязателен в stage/prod |
 | `AUTH_USER_ISSUER` | — | `iss` access JWT пользователя, как у user; обязателен в stage/prod |
 | `AUTH_USER_AUDIENCE` | — | `aud` access JWT пользователя, как у user; обязателен в stage/prod |
 | `SERVICE_TOKEN_FILE` | — | prod: projected ServiceAccount token с audience finassist-internal |
@@ -52,7 +53,7 @@
 
 ### Публичный API (FIN-268)
 
-В `stage` и `prod` публичный listener обслуживает 14 операций входа, профиля и помощника (`docs/server.md`). Обязательны `USER_GRPC_ADDR`, `ASSISTANT_GRPC_ADDR`, `AUTH_USER_ISSUER`, `AUTH_USER_AUDIENCE` и `CLIENT_MIN_VERSIONS`; без них старт завершается exit 1 до привязки портов. Идентичность собирает `go-identity` v0.2.0 `NewAssembly`: в `prod` — projected ServiceAccount token (`SERVICE_TOKEN_FILE`, отличный от API-токена пода) и JWKS API-сервера по HTTPS с CA из `AUTH_KUBERNETES_*` (пустые значения — значения по умолчанию библиотеки), в `stage` — три `AUTH_STAGE_*` файла; файлы стенда в `prod` — ошибка старта. Ключи проверки access JWT пользователя берутся из `user.GetSigningKeys` по `USER_GRPC_ADDR`. За прокси (nginx стенда, ingress prod) задайте `TRUSTED_PROXIES` сетями этих прокси: иначе адресом клиента для `x-client-ip` и предела `SSE_MAX_STREAMS_PER_IP` у всех будет адрес прокси.
+В `stage` и `prod` публичный listener обслуживает 20 операций входа, профиля, помощника и импорта (`docs/server.md`). Обязательны `USER_GRPC_ADDR`, `ASSISTANT_GRPC_ADDR`, `STATEMENTS_GRPC_ADDR`, `AUTH_USER_ISSUER`, `AUTH_USER_AUDIENCE` и `CLIENT_MIN_VERSIONS`; без них старт завершается exit 1 до привязки портов. Идентичность собирает `go-identity` v0.2.0 `NewAssembly`: в `prod` — projected ServiceAccount token (`SERVICE_TOKEN_FILE`, отличный от API-токена пода) и JWKS API-сервера по HTTPS с CA из `AUTH_KUBERNETES_*` (пустые значения — значения по умолчанию библиотеки), в `stage` — три `AUTH_STAGE_*` файла; файлы стенда в `prod` — ошибка старта. Ключи проверки access JWT пользователя берутся из `user.GetSigningKeys` по `USER_GRPC_ADDR`. За прокси (nginx стенда, ingress prod) задайте `TRUSTED_PROXIES` сетями этих прокси: иначе адресом клиента для `x-client-ip` и предела `SSE_MAX_STREAMS_PER_IP` у всех будет адрес прокси.
 
 В `dev` публичный mux пустой: любой путь — 404, как в каркасе FIN-261. `NewAssembly` не поддерживает `dev`, а обхода авторизации нет; локальная проверка API — только с настройками `stage`. БД, миграций, `AUTH_MODE` и входящего gRPC у BFF нет.
 
@@ -77,4 +78,4 @@ Go-зависимость BFF — `contracts/gen/go v0.5.0`, тег на `471482
 
 В частности, явный REST `false` у keyed POST останавливает прежний автоматический повтор после 409 `REQUEST_IN_PROGRESS` и 429 `RATE_LIMITED`, даже когда есть `Retry-After`; ожидание не подменяет proof ключа. Собственный 429 лимитера SSE до вызова сервиса получает явное разрешение транспортного обработчика для безопасного GET и сохраняет переоткрытие после ожидания.
 
-В BFF не появляется хранилище возраста ключей. Все POST пока получают REST `false`, даже с service advice `true`; для положительного решения нужен отдельный доказанный механизм срока всего исходного запроса. HTTP-маршруты импорта пока отсутствуют, поэтому миграция `ImportStreamError.status` потребует реализации соответствующего сценария отдельно.
+В BFF не появляется хранилище возраста ключей. Все POST пока получают REST `false`, даже с service advice `true`; для положительного решения нужен отдельный доказанный механизм срока всего исходного запроса. Импорт использует общий decoder для `ImportStreamError.status` в WatchUpload. Требуется совместимый StatementsService со всеми шестью RPC и недопущением эффектов до полного EOF файла; producer version/deployment подтверждается отдельно.

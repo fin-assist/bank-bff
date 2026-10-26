@@ -29,8 +29,8 @@ type API struct {
 	// Enabled is true in stage and prod. ENV=dev serves no business route: the
 	// identity assembly refuses dev, and there is no development bypass.
 	Enabled bool
-	// UserAddr and AssistantAddr are the gRPC targets of the peers.
-	UserAddr, AssistantAddr string
+	// UserAddr, AssistantAddr and StatementsAddr are the gRPC targets of the peers.
+	UserAddr, AssistantAddr, StatementsAddr string
 	// UserIssuer and UserAudience pin user access JWTs.
 	UserIssuer, UserAudience string
 	// Kubernetes is the prod service identity; Stage the stage one.
@@ -74,6 +74,7 @@ var Vars = []Var{
 	{"SHUTDOWN_TIMEOUT", "20s", "Общий предел graceful shutdown обоих listeners"},
 	{"USER_GRPC_ADDR", "", "gRPC-адрес сервиса user (`dns:///user.finassist.svc.cluster.local:9090`); обязателен в stage/prod"},
 	{"ASSISTANT_GRPC_ADDR", "", "gRPC-адрес сервиса assistant; обязателен в stage/prod"},
+	{"STATEMENTS_GRPC_ADDR", "", "gRPC-адрес bank-statement-data для шести RPC импорта; обязателен в stage/prod"},
 	{"AUTH_USER_ISSUER", "", "`iss` access JWT пользователя, как у user; обязателен в stage/prod"},
 	{"AUTH_USER_AUDIENCE", "", "`aud` access JWT пользователя, как у user; обязателен в stage/prod"},
 	{"SERVICE_TOKEN_FILE", "", "prod: projected ServiceAccount token с audience finassist-internal"},
@@ -142,7 +143,7 @@ func load(getenv func(string) string) (Config, error) {
 
 func loadAPI(env string, v map[string]string) (API, []error) {
 	api := API{
-		Enabled: env == "stage" || env == "prod", UserAddr: v["USER_GRPC_ADDR"], AssistantAddr: v["ASSISTANT_GRPC_ADDR"],
+		Enabled: env == "stage" || env == "prod", UserAddr: v["USER_GRPC_ADDR"], AssistantAddr: v["ASSISTANT_GRPC_ADDR"], StatementsAddr: v["STATEMENTS_GRPC_ADDR"],
 		UserIssuer: v["AUTH_USER_ISSUER"], UserAudience: v["AUTH_USER_AUDIENCE"],
 		Kubernetes: Kubernetes{TokenFile: v["SERVICE_TOKEN_FILE"], Issuer: v["AUTH_KUBERNETES_ISSUER"], JWKSURL: v["AUTH_KUBERNETES_JWKS_URL"],
 			CAFile: v["AUTH_KUBERNETES_CA_FILE"], APITokenFile: v["AUTH_KUBERNETES_API_TOKEN_FILE"], Namespace: v["AUTH_KUBERNETES_NAMESPACE"]},
@@ -202,7 +203,7 @@ func loadAPI(env string, v map[string]string) (API, []error) {
 	if !api.Enabled {
 		return api, errs
 	}
-	for _, key := range []string{"USER_GRPC_ADDR", "ASSISTANT_GRPC_ADDR", "AUTH_USER_ISSUER", "AUTH_USER_AUDIENCE", "CLIENT_MIN_VERSIONS"} {
+	for _, key := range []string{"USER_GRPC_ADDR", "ASSISTANT_GRPC_ADDR", "STATEMENTS_GRPC_ADDR", "AUTH_USER_ISSUER", "AUTH_USER_AUDIENCE", "CLIENT_MIN_VERSIONS"} {
 		if strings.TrimSpace(v[key]) == "" {
 			errs = append(errs, fmt.Errorf("%s is required in %s", key, env))
 		}

@@ -1,5 +1,5 @@
-// Package endpoint implements the REST/SSE operations of sign-in, profile and the
-// assistant (FIN-268) over the internal gRPC services. Handlers translate contract
+// Package endpoint implements the REST/SSE operations of sign-in, profile,
+// assistant and statement imports (FIN-268/FIN-342) over the internal gRPC services. Handlers translate contract
 // JSON to protobuf and back; business checks, quotas and idempotent effects stay in
 // the services (grpc-api.md 3, 6).
 package endpoint
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
+	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
 	"google.golang.org/grpc"
 
@@ -49,11 +50,25 @@ type AssistantClient interface {
 	GetLimit(ctx context.Context, in *assistantv1.GetLimitRequest, opts ...grpc.CallOption) (*assistantv1.GetLimitResponse, error)
 }
 
+// StatementsClient is the six import RPCs of statementdata.StatementsService.
+type StatementsClient interface {
+	GetImportConfig(context.Context, *statementdatav1.GetImportConfigRequest, ...grpc.CallOption) (*statementdatav1.GetImportConfigResponse, error)
+	ListUploads(context.Context, *statementdatav1.ListUploadsRequest, ...grpc.CallOption) (*statementdatav1.ListUploadsResponse, error)
+	UploadStatement(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[statementdatav1.UploadStatementRequest, statementdatav1.UploadStatementResponse], error)
+	WatchUpload(context.Context, *statementdatav1.WatchUploadRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[statementdatav1.WatchUploadResponse], error)
+	DeleteUpload(context.Context, *statementdatav1.DeleteUploadRequest, ...grpc.CallOption) (*statementdatav1.DeleteUploadResponse, error)
+	ListUnreadLines(context.Context, *statementdatav1.ListUnreadLinesRequest, ...grpc.CallOption) (*statementdatav1.ListUnreadLinesResponse, error)
+}
+
 // Deadlines of internal calls (grpc-api.md 9).
 const (
 	// UnaryDeadline bounds ordinary unary calls; it is well below the listener write
 	// timeout, so the error answer of an expired call is still written.
 	UnaryDeadline = 5 * time.Second
+	// UploadDeadline bounds file transfer and synchronous service validation.
+	UploadDeadline = time.Minute
+	// ImportStreamDeadline bounds WatchUpload; parsing runs independently.
+	ImportStreamDeadline = 4 * time.Minute
 	// AnswerStreamDeadline bounds WatchAnswer (generation ends within 3 minutes).
 	AnswerStreamDeadline = 4 * time.Minute
 	// PhoneStreamDeadline bounds WatchPhoneVerification: a request lives 5 minutes
@@ -65,10 +80,11 @@ const (
 
 // Deps are the peers and settings of the handlers.
 type Deps struct {
-	Auth      AuthClient
-	Consents  ConsentClient
-	Profile   ProfileClient
-	Assistant AssistantClient
+	Auth       AuthClient
+	Consents   ConsentClient
+	Profile    ProfileClient
+	Assistant  AssistantClient
+	Statements StatementsClient
 	// Heartbeat is the SSE comment interval; zero means rest.Heartbeat.
 	Heartbeat time.Duration
 	// AnswerStream and PhoneStream override the stream deadlines; zero keeps the defaults.
@@ -89,9 +105,15 @@ func orDefault(v, def time.Duration) time.Duration {
 	return def
 }
 
-// Routes are the 14 operations of FIN-268.
+// Routes are the auth, profile, assistant and import contract operations.
 func (d Deps) Routes() []rest.Route {
 	return []rest.Route{
+		{Method: http.MethodGet, Path: "/v1/statements/config", Protected: rest.Always, ReplaySafe: true, Handle: d.importConfig},
+		{Method: http.MethodPost, Path: "/v1/statements", Protected: rest.Always, Idempotent: true, Input: rest.StreamingInput, Handle: d.uploadStatement},
+		{Method: http.MethodGet, Path: "/v1/statements/{upload_id}/progress", Protected: rest.Always, ReplaySafe: true, Handle: d.watchUpload},
+		{Method: http.MethodGet, Path: "/v1/statements", Protected: rest.Always, ReplaySafe: true, Handle: d.listUploads},
+		{Method: http.MethodDelete, Path: "/v1/statements/{upload_id}", Protected: rest.Always, ReplaySafe: true, Handle: d.deleteUpload},
+		{Method: http.MethodGet, Path: "/v1/statements/unread-lines", Protected: rest.Always, ReplaySafe: true, Handle: d.unreadLines},
 		{Method: http.MethodPost, Path: "/v1/auth/phone", Idempotent: true, Handle: d.startPhone},
 		{Method: http.MethodGet, Path: "/v1/auth/phone/events", ReplaySafe: true, Handle: d.watchPhone},
 		{Method: http.MethodPost, Path: "/v1/auth/register", Idempotent: true, Handle: d.register},

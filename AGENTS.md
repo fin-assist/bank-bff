@@ -3,7 +3,8 @@
 `bank-bff` is the stateless HTTP backend for frontend of «Понятные финансы», adapted from
 `fin-assist/go-service-template` main 6ea35ce (FIN-246) in FIN-261. Read README.md first.
 FIN-268 (FIN-331) serves 14 public REST/SSE operations of auth, consents, profile reads/assistant
-consent and the assistant (docs/server.md); every other contract operation answers 404 until its task.
+consent and the assistant; FIN-342 adds six import operations (docs/server.md). Every other
+contract operation answers 404 until its task.
 Do not invent REST fields, RPCs or error codes.
 Contracts live in `fin-assist/contracts`: docs/api.md, openapi/openapi.yaml, docs/grpc-api.md.
 The owner's latest decision and contracts take precedence over copied template assumptions.
@@ -15,7 +16,7 @@ The owner's latest decision and contracts take precedence over copied template a
   api.go builds the public API (embedded contract, go-identity Assembly, go-grpc peers) before bind.
 - internal/rest: request ID, gates (MAINTENANCE, X-Client-Version), auth, body limit and kin-openapi
   validation, finerr.ToREST translation and whole-request retry safety, SSE pump/limits, metrics and access log.
-- internal/endpoint: the 14 operations, REST <-> gRPC conversion; internal/catalog: user_message and
+- internal/endpoint: the 20 operations, REST <-> gRPC conversion; internal/catalog: user_message and
   severity texts (FIN-225); internal/apispec: embedded openapi.yaml copy with its contracts commit.
 - internal/testpeer: test infrastructure only — bufconn fakes of user/assistant, keys, contract checks.
 - internal/config: all environment settings in Vars; docs/config.md table is checked by tests.
@@ -43,7 +44,7 @@ Do not infer permission from an error code, HTTP status, RetryInfo, text or UUID
 is decoded only by finerr.DecodeResultStatus: valid canonical reason wins, present-invalid never reads
 legacy code, absent uses the legacy adapter. Result retryable is the service's separate new-attempt
 permission, including false. Do not detect assistant capability from legacy text or proto3 bool.
-Rollout/rollback prerequisites are in docs/config.md; import routes remain unimplemented.
+Rollout/rollback prerequisites are in docs/config.md; import routes use STATEMENTS_GRPC_ADDR and six StatementsService RPCs.
 
 ## Security
 
@@ -114,6 +115,6 @@ Security: authorization boundaries, private operational listener, no data leakag
 shutdown, startup failure cleanup, trusted metadata, safe CI and fork permissions.
 Tests: meaningful behavior coverage at all three levels; real HTTP API and transport dependencies;
 negative startup/shutdown scenarios; unchanged strict guards and independent total80.
-Only the 14 FIN-268 operations exist; do not require absent handlers solely to increase coverage, and do
+Only the 20 FIN-268/FIN-342 operations exist; do not require absent handlers solely to increase coverage, and do
 not treat passing tests as implementing unimplemented contract operations. Each served operation needs
 API tests for success, its declared errors, token, Idempotency-Key, schema, client version and SSE.

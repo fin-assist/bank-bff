@@ -12,7 +12,7 @@ import (
 )
 
 // apiValues are the settings stage and prod require for the public API.
-var apiValues = map[string]string{"USER_GRPC_ADDR": "dns:///user:9090", "ASSISTANT_GRPC_ADDR": "dns:///assistant:9090",
+var apiValues = map[string]string{"USER_GRPC_ADDR": "dns:///user:9090", "ASSISTANT_GRPC_ADDR": "dns:///assistant:9090", "STATEMENTS_GRPC_ADDR": "dns:///statements:9090",
 	"AUTH_USER_ISSUER": "https://user", "AUTH_USER_AUDIENCE": "bank-bff", "CLIENT_MIN_VERSIONS": "android=0.2.5"}
 
 func TestUnitDefaultsAndOverrides(t *testing.T) {

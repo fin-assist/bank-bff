@@ -24,6 +24,9 @@ type Route struct {
 	// by its contract, including every child RPC/effect. It is not service permission.
 	// Default false. A keyed operation still needs proof of its replay window.
 	ReplaySafe bool
+	// Input optionally validates a streaming input without buffering it. Nil retains
+	// the standard JSON pipeline. Route-specific parsing remains in the handler.
+	Input ValidateInput
 	// Handle serves a request that passed every BFF check.
 	Handle func(*Call)
 }
@@ -150,13 +153,16 @@ func routeHandler(cfg Config, route Route, op apispec.Operation) http.Handler {
 		if rec, ok := w.(*recorder); ok {
 			rec.route = route.Path
 		}
-		body, refusal := ReadBody(r, op, cfg.BodyLimit)
+		path := pathValues(route.Path, r)
+		input := route.Input
+		if input == nil {
+			input = JSONInput
+		}
+		body, details, refusal := input(r, op, path, cfg.BodyLimit)
 		if refusal != nil {
 			refusal.Write(w)
 			return
 		}
-		path := pathValues(route.Path, r)
-		details := Validate(r.Context(), r, op, path, body)
 		key := ""
 		if route.Idempotent {
 			values := r.Header.Values("Idempotency-Key")

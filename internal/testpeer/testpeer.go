@@ -1,5 +1,5 @@
 // Package testpeer is test infrastructure: in-process gRPC fakes of the user and
-// assistant services on bufconn, user JWT keys and stage service identity files.
+// assistant and statement services on bufconn, user JWT keys and stage service identity files.
 // It is never wired into the serve command.
 package testpeer
 
@@ -21,6 +21,7 @@ import (
 	"time"
 
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
+	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
 	identity "github.com/fin-assist/go-identity"
 	"google.golang.org/grpc"
@@ -117,14 +118,15 @@ type Call struct {
 	MD     metadata.MD
 }
 
-// Peers is one in-process gRPC server playing user and assistant. Handlers are the
+// Peers is one in-process gRPC server playing user, assistant and statements. Handlers are the
 // fake behaviour; unset methods answer UNIMPLEMENTED. Peers is safe for concurrent use.
 type Peers struct {
-	Auth      *Auth
-	Consents  *Consents
-	Profile   *Profile
-	Assistant *Assistant
-	Keys      *Keys
+	Auth       *Auth
+	Consents   *Consents
+	Profile    *Profile
+	Assistant  *Assistant
+	Statements *Statements
+	Keys       *Keys
 
 	listener *bufconn.Listener
 	server   *grpc.Server
@@ -144,7 +146,7 @@ func Start(t testing.TB, keys *Keys, stage StageFiles) *Peers {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &Peers{Auth: &Auth{}, Consents: &Consents{}, Profile: &Profile{}, Assistant: &Assistant{}, Keys: keys,
+	p := &Peers{Auth: &Auth{}, Consents: &Consents{}, Profile: &Profile{}, Assistant: &Assistant{}, Statements: &Statements{}, Keys: keys,
 		listener: bufconn.Listen(1 << 20), verifier: verifier}
 	p.server = grpc.NewServer(grpc.ChainUnaryInterceptor(p.unary), grpc.ChainStreamInterceptor(p.stream))
 	userv1.RegisterUserInternalServiceServer(p.server, signingKeys{keys: keys, peers: p})
@@ -152,6 +154,7 @@ func Start(t testing.TB, keys *Keys, stage StageFiles) *Peers {
 	userv1.RegisterConsentDocumentServiceServer(p.server, p.Consents)
 	userv1.RegisterProfileServiceServer(p.server, p.Profile)
 	assistantv1.RegisterAssistantServiceServer(p.server, p.Assistant)
+	statementdatav1.RegisterStatementsServiceServer(p.server, p.Statements)
 	go func() { _ = p.server.Serve(p.listener) }()
 	t.Cleanup(p.server.Stop)
 	return p
