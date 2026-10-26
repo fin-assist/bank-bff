@@ -349,6 +349,56 @@ func TestUnitImportSecondHeaderUsesRemainingEnvelopeBudget(t *testing.T) {
 	}
 }
 
+// This alignment exhausts the envelope while multipart reads the file tail:
+// prefetched second-header bytes make the remaining budget negative before parsing.
+func TestUnitImportRejectsAlreadyExhaustedEnvelopeBeforeSecondHeader(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	u.statements.upload = &uploadFake{}
+	const fileBytes = 300_000
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", `form-data; name="file"; filename="x.ofx"`)
+	h.Set("X-First", strings.Repeat("x", 65_000))
+	first, err := w.CreatePart(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.WriteString(first, strings.Repeat("f", fileBytes)); err != nil {
+		t.Fatal(err)
+	}
+	h = textproto.MIMEHeader{}
+	h.Set("Content-Disposition", `form-data; name="extra"`)
+	h.Set("X-Large", strings.Repeat("x", 5<<20))
+	if _, err = w.CreatePart(h); err != nil {
+		t.Fatal(err)
+	}
+	if err = w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/v1/statements", strings.NewReader(body.String()))
+	counter := &importReadCounter{ReadCloser: req.Body}
+	req.Body = counter
+	req.Header.Set("X-Client-Version", "android/0.2.5+41")
+	req.Header.Set("Authorization", goodToken)
+	req.Header.Set("Idempotency-Key", testKey)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	res := httptest.NewRecorder()
+	u.h.ServeHTTP(res, req)
+	forwarded := 0
+	for _, part := range u.statements.upload.sent {
+		forwarded += len(part.GetChunk())
+	}
+	if forwarded != fileBytes || counter.bytes-fileBytes <= maxImportEnvelopeBytes+1 {
+		t.Fatalf("fixture did not exhaust the remaining budget after the file: forwarded=%d read=%d", forwarded, counter.bytes)
+	}
+	// At most one 4 KiB MIME read-ahead was needed to finish the file. Parsing the
+	// second header must not continue with a negative (unlimited) reader allowance.
+	if res.Code != 400 || counter.bytes > fileBytes+maxImportEnvelopeBytes+4096 || u.statements.upload.closed {
+		t.Fatalf("exhausted envelope resumed unbounded MIME parsing: status=%d read=%d closed=%v", res.Code, counter.bytes, u.statements.upload.closed)
+	}
+}
+
 type noProgressImportReader struct{}
 
 func (noProgressImportReader) Read([]byte) (int, error) { return 0, nil }
