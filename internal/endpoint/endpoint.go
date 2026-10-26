@@ -93,19 +93,19 @@ func orDefault(v, def time.Duration) time.Duration {
 func (d Deps) Routes() []rest.Route {
 	return []rest.Route{
 		{Method: http.MethodPost, Path: "/v1/auth/phone", Idempotent: true, Handle: d.startPhone},
-		{Method: http.MethodGet, Path: "/v1/auth/phone/events", Handle: d.watchPhone},
+		{Method: http.MethodGet, Path: "/v1/auth/phone/events", ReplaySafe: true, Handle: d.watchPhone},
 		{Method: http.MethodPost, Path: "/v1/auth/register", Idempotent: true, Handle: d.register},
 		{Method: http.MethodPost, Path: "/v1/auth/token", Idempotent: true, Handle: d.refresh},
 		{Method: http.MethodPost, Path: "/v1/auth/logout", Protected: rest.Always, Handle: d.logout},
-		{Method: http.MethodGet, Path: "/v1/consents/{type}", Protected: assistantDocument, Handle: d.consentDocument},
-		{Method: http.MethodGet, Path: "/v1/profile", Protected: rest.Always, Handle: d.profile},
-		{Method: http.MethodPut, Path: "/v1/profile/assistant-consent", Protected: rest.Always, Handle: d.grantConsent},
-		{Method: http.MethodDelete, Path: "/v1/profile/assistant-consent", Protected: rest.Always, Handle: d.revokeConsent},
-		{Method: http.MethodGet, Path: "/v1/assistant/messages", Protected: rest.Always, Handle: d.listMessages},
+		{Method: http.MethodGet, Path: "/v1/consents/{type}", Protected: assistantDocument, ReplaySafe: true, Handle: d.consentDocument},
+		{Method: http.MethodGet, Path: "/v1/profile", Protected: rest.Always, ReplaySafe: true, Handle: d.profile},
+		{Method: http.MethodPut, Path: "/v1/profile/assistant-consent", Protected: rest.Always, ReplaySafe: true, Handle: d.grantConsent},
+		{Method: http.MethodDelete, Path: "/v1/profile/assistant-consent", Protected: rest.Always, ReplaySafe: true, Handle: d.revokeConsent},
+		{Method: http.MethodGet, Path: "/v1/assistant/messages", Protected: rest.Always, ReplaySafe: true, Handle: d.listMessages},
 		{Method: http.MethodPost, Path: "/v1/assistant/messages", Protected: rest.Always, Idempotent: true, Handle: d.ask},
-		{Method: http.MethodGet, Path: "/v1/assistant/messages/{answer_id}/events", Protected: rest.Always, Handle: d.watchAnswer},
+		{Method: http.MethodGet, Path: "/v1/assistant/messages/{answer_id}/events", Protected: rest.Always, ReplaySafe: true, Handle: d.watchAnswer},
 		{Method: http.MethodPost, Path: "/v1/assistant/messages/{answer_id}/retry", Protected: rest.Always, Idempotent: true, Handle: d.retry},
-		{Method: http.MethodGet, Path: "/v1/assistant/limit", Protected: rest.Always, Handle: d.limit},
+		{Method: http.MethodGet, Path: "/v1/assistant/limit", Protected: rest.Always, ReplaySafe: true, Handle: d.limit},
 	}
 }
 
@@ -118,7 +118,7 @@ func openStream(c *rest.Call, timeout time.Duration) (ctx context.Context, done 
 	release, ok := c.Streams.Acquire(rest.HintsFrom(c.R.Context()).ClientIP)
 	if !ok {
 		c.Metrics.StreamRejected(c.Op.Route.Path)
-		c.Streams.Busy(c.Clock()).Write(c.W)
+		c.Refuse(c.Streams.Busy(c.Clock()), true)
 		return nil, nil, false
 	}
 	if err := rest.ExtendDeadlines(c.W, time.Now().Add(timeout+streamWriteMargin)); err != nil {

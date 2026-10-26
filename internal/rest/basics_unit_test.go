@@ -111,8 +111,8 @@ func TestUnitErrorWriteUsesCatalogAndFreshWait(t *testing.T) {
 		got.UserMessage != entry.Text || got.Severity != entry.Severity || got.Message != entry.Diagnostic || got.RetryAt == "" {
 		t.Fatalf("%d %v %+v", res.Code, res.Header(), got)
 	}
-	if strings.Contains(res.Body.String(), "retryable") {
-		t.Fatal("REST retryable needs RequestRetryInfo (FIN-225, new gen/go tag): it stays absent")
+	if got.Retryable == nil || *got.Retryable {
+		t.Fatal("no service permission/request proof must produce explicit false")
 	}
 	res = httptest.NewRecorder()
 	Error{Status: 418, Code: "SOMETHING_NEW"}.Write(res)

@@ -20,6 +20,10 @@ type Route struct {
 	Protected func(*http.Request) bool
 	// Idempotent marks operations that require Idempotency-Key (docs/api.md, «Идемпотентность»).
 	Idempotent bool
+	// ReplaySafe declares that repeating the entire original REST operation is safe
+	// by its contract, including every child RPC/effect. It is not service permission.
+	// Default false. A keyed operation still needs proof of its replay window.
+	ReplaySafe bool
 	// Handle serves a request that passed every BFF check.
 	Handle func(*Call)
 }
@@ -43,14 +47,27 @@ type Call struct {
 	Streams *StreamLimiter
 	// Clock is "now" for fresh retry moments.
 	Clock func() time.Time
+	// replaySafe is established only by the validated route, never by the error reason or a UUID.
+	replaySafe bool
 }
 
-// Fail answers an internal call error by its registry reason.
+// Fail translates an internal call error and permits original-request replay only
+// when service permission and the validated whole-operation safety declaration agree.
 func (c *Call) Fail(err error) {
 	e := c.Metrics.FromGRPC(err, c.Op.Statuses)
 	if e.Code == "INTERNAL_ERROR" {
 		c.Log.WarnContext(c.R.Context(), "internal call failed", "grpc_code", codeOf(err))
 	}
+	c.Refuse(e, e.serviceRequestRetryable != nil && *e.serviceRequestRetryable)
+}
+
+// Refuse sends a handler-owned refusal. retryAllowed is the transport handler's
+// explicit permission to repeat this original request, not a permission inferred
+// from the error code, catalog, status or wait. It grants retry only together with
+// the validated route's proof of safety for the entire external operation.
+func (c *Call) Refuse(e Error, retryAllowed bool) {
+	allowed := retryAllowed && c.replaySafe
+	e.Retryable = &allowed
 	e.Write(c.W)
 }
 
@@ -163,7 +180,9 @@ func routeHandler(cfg Config, route Route, op apispec.Operation) http.Handler {
 			ctx = WithHints(ctx, h)
 		}
 		route.Handle(&Call{W: w, R: r.WithContext(ctx), Op: op, Body: body, Metrics: cfg.Metrics,
-			Log: cfg.Log, Streams: cfg.Streams, Clock: cfg.Clock})
+			Log: cfg.Log, Streams: cfg.Streams, Clock: cfg.Clock,
+			replaySafe: route.ReplaySafe && !route.Idempotent && op.Route != nil &&
+				r.Method == route.Method && op.Route.Method == route.Method && op.Route.Path == route.Path})
 	})
 	protected := cfg.Authenticate(checked)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
