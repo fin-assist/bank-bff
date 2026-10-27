@@ -126,13 +126,35 @@ func scenarioProfileDeletion(t *testing.T, start starter) {
 				return nil, finerr.TokenRevoked()
 			}
 			out := profileMessage(false)
-			out.UserId = "u2"
+			if strings.Join(md.Get("authorization"), "") == "Bearer "+other {
+				out.UserId = "u2"
+			}
 			return &userv1.GetProfileResponse{Profile: out}, nil
 		}
-		p.UpdateFunc = func(context.Context, *userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error) {
-			return nil, finerr.TokenRevoked()
+		p.UpdateFunc = func(ctx context.Context, _ *userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error) {
+			md, _ := metadata.FromIncomingContext(ctx)
+			mu.Lock()
+			deleted := removed[strings.Join(md.Get("authorization"), "")]
+			mu.Unlock()
+			if deleted {
+				return nil, finerr.TokenRevoked()
+			}
+			out := profileMessage(false)
+			if strings.Join(md.Get("authorization"), "") == "Bearer "+other {
+				out.UserId = "u2"
+			}
+			return &userv1.UpdateProfileResponse{Profile: out}, nil
 		}
 	})
+	for _, method := range []string{"GET", "PATCH"} {
+		body := ""
+		if method == "PATCH" {
+			body = `{}`
+		}
+		if r := b.do(t, request{method: method, path: "/v1/profile", route: "/v1/profile", header: auth, body: body}); r.StatusCode != 200 || r.json["user_id"] != "u1" {
+			t.Fatal("live profile before deletion", method, r.StatusCode, string(r.body))
+		}
+	}
 	req := request{method: "DELETE", path: "/v1/profile", route: "/v1/profile", header: auth}
 	for range 2 {
 		if r := b.do(t, req); r.StatusCode != 204 || len(r.body) != 0 {
@@ -152,6 +174,10 @@ func scenarioProfileDeletion(t *testing.T, start starter) {
 		t.Fatal(r.StatusCode, string(r.body))
 	}
 	lastCall(t, b, userv1.ProfileService_GetProfile_FullMethodName, other, "")
+	if r := b.do(t, request{method: "PATCH", path: "/v1/profile", route: "/v1/profile", header: base(map[string]string{"Authorization": "Bearer " + other}), body: `{}`}); r.StatusCode != 200 || r.json["user_id"] != "u2" {
+		t.Fatal("other token after deletion", r.StatusCode, string(r.body))
+	}
+	lastCall(t, b, userv1.ProfileService_UpdateProfile_FullMethodName, other, "")
 	calls := len(b.peers.Calls(userv1.ProfileService_DeleteAccount_FullMethodName))
 	req.body = `{"user_id":"u2"}`
 	if r := b.do(t, req); r.StatusCode != 400 || len(b.peers.Calls(userv1.ProfileService_DeleteAccount_FullMethodName)) != calls {

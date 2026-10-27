@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -129,6 +130,7 @@ func TestUnitProfileMutations(t *testing.T) {
 		{`{"theme":"light"}`, userv1.Theme_THEME_LIGHT.Enum(), nil},
 		{`{"theme":"dark"}`, userv1.Theme_THEME_DARK.Enum(), nil},
 		{`{"timezone":"Asia/Vladivostok"}`, nil, proto.String("Asia/Vladivostok")},
+		{`{"timezone":""}`, nil, proto.String("")},
 		{`{"theme":"light","timezone":"UTC"}`, userv1.Theme_THEME_LIGHT.Enum(), proto.String("UTC")},
 		{`{"theme":"dark","Theme":"light","Timezone":"UTC"}`, userv1.Theme_THEME_DARK.Enum(), nil},
 	} {
@@ -212,5 +214,18 @@ func TestUnitProfileThemeUnknownFailsClosedBeforeRPC(t *testing.T) {
 	(Deps{Profile: f}).updateProfile(&rest.Call{W: response, R: httptest.NewRequest("PATCH", "/v1/profile", nil).WithContext(context.Background()), Body: []byte(`{"theme":"sepia"}`)})
 	if response.Code != 400 || calls != 0 {
 		t.Fatal("unknown theme was forwarded", response.Code, calls, response.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code      string        `json:"code"`
+			Retryable *bool         `json:"retryable"`
+			Details   []rest.Detail `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != "VALIDATION_ERROR" || body.Error.Retryable == nil || *body.Error.Retryable || len(body.Error.Details) != 1 || body.Error.Details[0].Field != "theme" || body.Error.Details[0].Code != rest.DetailInvalidFormat {
+		t.Fatalf("drift refusal changed: %s", response.Body.String())
 	}
 }
