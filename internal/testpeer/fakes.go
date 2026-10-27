@@ -86,6 +86,8 @@ type Profile struct {
 	userv1.UnimplementedProfileServiceServer
 	mu         sync.Mutex
 	GetFunc    func(context.Context, *userv1.GetProfileRequest) (*userv1.GetProfileResponse, error)
+	UpdateFunc func(context.Context, *userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error)
+	DeleteFunc func(context.Context, *userv1.DeleteAccountRequest) (*userv1.DeleteAccountResponse, error)
 	GrantFunc  func(context.Context, *userv1.GrantAssistantConsentRequest) (*userv1.GrantAssistantConsentResponse, error)
 	RevokeFunc func(context.Context, *userv1.RevokeAssistantConsentRequest) (*userv1.RevokeAssistantConsentResponse, error)
 }
@@ -96,6 +98,22 @@ func (p *Profile) GetProfile(ctx context.Context, r *userv1.GetProfileRequest) (
 		return f(ctx, r)
 	}
 	return p.UnimplementedProfileServiceServer.GetProfile(ctx, r)
+}
+
+// UpdateProfile implements the RPC.
+func (p *Profile) UpdateProfile(ctx context.Context, r *userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error) {
+	if f := get(&p.mu, &p.UpdateFunc); f != nil {
+		return f(ctx, r)
+	}
+	return p.UnimplementedProfileServiceServer.UpdateProfile(ctx, r)
+}
+
+// DeleteAccount implements the RPC.
+func (p *Profile) DeleteAccount(ctx context.Context, r *userv1.DeleteAccountRequest) (*userv1.DeleteAccountResponse, error) {
+	if f := get(&p.mu, &p.DeleteFunc); f != nil {
+		return f(ctx, r)
+	}
+	return p.UnimplementedProfileServiceServer.DeleteAccount(ctx, r)
 }
 
 // GrantAssistantConsent implements the RPC.

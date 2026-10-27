@@ -97,6 +97,10 @@ func TestUnitFakesDelegateOrAnswerUnimplemented(t *testing.T) {
 	unimplemented(err)
 	_, err = p.GetProfile(ctx, nil)
 	unimplemented(err)
+	_, err = p.UpdateProfile(ctx, nil)
+	unimplemented(err)
+	_, err = p.DeleteAccount(ctx, nil)
+	unimplemented(err)
 	_, err = p.GrantAssistantConsent(ctx, nil)
 	unimplemented(err)
 	_, err = p.RevokeAssistantConsent(ctx, nil)
@@ -138,6 +142,14 @@ func TestUnitFakesDelegateOrAnswerUnimplemented(t *testing.T) {
 		}
 	})
 	p.Set(func(p *Profile) {
+		p.UpdateFunc = func(context.Context, *userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error) {
+			calls++
+			return nil, nil
+		}
+		p.DeleteFunc = func(context.Context, *userv1.DeleteAccountRequest) (*userv1.DeleteAccountResponse, error) {
+			calls++
+			return nil, nil
+		}
 		p.GetFunc = func(context.Context, *userv1.GetProfileRequest) (*userv1.GetProfileResponse, error) {
 			calls++
 			return nil, nil
@@ -180,6 +192,8 @@ func TestUnitFakesDelegateOrAnswerUnimplemented(t *testing.T) {
 	_, _ = a.Logout(ctx, nil)
 	_, _ = c.GetConsentDocument(ctx, nil)
 	_, _ = p.GetProfile(ctx, nil)
+	_, _ = p.UpdateProfile(ctx, nil)
+	_, _ = p.DeleteAccount(ctx, nil)
 	_, _ = p.GrantAssistantConsent(ctx, nil)
 	_, _ = p.RevokeAssistantConsent(ctx, nil)
 	_, _ = s.AskQuestion(ctx, nil)
@@ -187,7 +201,7 @@ func TestUnitFakesDelegateOrAnswerUnimplemented(t *testing.T) {
 	_, _ = s.ListMessages(ctx, nil)
 	_, _ = s.RetryAnswer(ctx, nil)
 	_, _ = s.GetLimit(ctx, nil)
-	if calls != 14 {
+	if calls != 16 {
 		t.Fatal(calls)
 	}
 	if out, err := (signingKeys{keys: NewKeys(t)}).GetSigningKeys(ctx, nil); err != nil || !strings.Contains(out.GetJwksJson(), "Ed25519") {

@@ -79,3 +79,44 @@ func (d Deps) revokeConsent(c *rest.Call) {
 	}
 	rest.WriteNoContent(c.W)
 }
+
+var profileThemes = map[string]userv1.Theme{
+	"system": userv1.Theme_THEME_SYSTEM, "light": userv1.Theme_THEME_LIGHT, "dark": userv1.Theme_THEME_DARK,
+}
+
+func (d Deps) updateProfile(c *rest.Call) {
+	var in struct {
+		Theme    *string `json:"theme"`
+		Timezone *string `json:"timezone"`
+	}
+	if !decode(c, &in) {
+		return
+	}
+	request := &userv1.UpdateProfileRequest{Timezone: in.Timezone}
+	if in.Theme != nil {
+		theme, known := profileThemes[*in.Theme]
+		if !known {
+			rest.Validation(rest.Detail{Field: "theme", Code: rest.DetailInvalidFormat, Message: "has invalid format"}).Write(c.W)
+			return
+		}
+		request.Theme = theme.Enum()
+	}
+	ctx, cancel := unary(c)
+	defer cancel()
+	resp, err := d.Profile.UpdateProfile(ctx, request)
+	if err != nil {
+		c.Fail(err)
+		return
+	}
+	rest.WriteJSON(c.W, http.StatusOK, profileJSON(resp.GetProfile()))
+}
+
+func (d Deps) deleteAccount(c *rest.Call) {
+	ctx, cancel := unary(c)
+	defer cancel()
+	if _, err := d.Profile.DeleteAccount(ctx, &userv1.DeleteAccountRequest{}); err != nil {
+		c.Fail(err)
+		return
+	}
+	rest.WriteNoContent(c.W)
+}
