@@ -35,6 +35,8 @@ func scenarioGates(t *testing.T, start starter) {
 		{method: "POST", path: "/v1/auth/phone", route: "/v1/auth/phone", body: `{"phone":"+79001234567"}`},
 		{method: "GET", path: "/v1/auth/phone/events", route: "/v1/auth/phone/events"},
 		{method: "GET", path: "/v1/profile", route: "/v1/profile"},
+		{method: "PATCH", path: "/v1/profile", route: "/v1/profile", body: `{"theme":"dark"}`},
+		{method: "DELETE", path: "/v1/profile", route: "/v1/profile"},
 		{method: "GET", path: "/v1/assistant/messages/a1/events", route: "/v1/assistant/messages/{answer_id}/events"},
 		{method: "GET", path: "/v1/consents/personal_data", route: "/v1/consents/{type}"},
 	}
@@ -75,7 +77,7 @@ func scenarioGates(t *testing.T, start starter) {
 			t.Fatalf("%s: %d %s", path, resp.StatusCode, body)
 		}
 	}
-	got := b.raw(t, request{method: "PATCH", path: "/v1/profile", body: `{"theme":"dark"}`, header: base(map[string]string{"Authorization": "Bearer " + access})})
+	got := b.raw(t, request{method: "PUT", path: "/v1/profile", body: `{"theme":"dark"}`, header: base(map[string]string{"Authorization": "Bearer " + access})})
 	resp := got.Response
 	if resp.StatusCode != 404 {
 		t.Fatalf("an operation outside FIN-268 is not served: %d", resp.StatusCode)
@@ -101,6 +103,8 @@ func scenarioMaintenance(t *testing.T, start starter) {
 		{method: "GET", path: "/v1/statements/unread-lines?upload_id=u1", route: "/v1/statements/unread-lines"},
 		{method: "POST", path: "/v1/auth/phone", route: "/v1/auth/phone", body: `{"phone":"+79001234567"}`},
 		{method: "GET", path: "/v1/profile", route: "/v1/profile"},
+		{method: "PATCH", path: "/v1/profile", route: "/v1/profile", body: `{"theme":"dark"}`},
+		{method: "DELETE", path: "/v1/profile", route: "/v1/profile"},
 		{method: "GET", path: "/v1/assistant/messages/a1/events", route: "/v1/assistant/messages/{answer_id}/events"},
 	} {
 		// Maintenance precedes the client version check.

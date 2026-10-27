@@ -38,6 +38,20 @@ func scenarioOperationErrors(t *testing.T, start starter) {
 	b := start(t, nil)
 	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
 	ops := []failingOperation{
+		{request{method: "PATCH", path: "/v1/profile", route: "/v1/profile", body: `{"theme":"dark"}`}, userv1.ProfileService_UpdateProfile_FullMethodName, declared(400, 401, 429, 500, 503), func(p *testpeer.Peers, err error) {
+			p.Profile.Set(func(pr *testpeer.Profile) {
+				pr.UpdateFunc = func(context.Context, *userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error) {
+					return nil, err
+				}
+			})
+		}},
+		{request{method: "DELETE", path: "/v1/profile", route: "/v1/profile"}, userv1.ProfileService_DeleteAccount_FullMethodName, declared(400, 401, 429, 500, 503), func(p *testpeer.Peers, err error) {
+			p.Profile.Set(func(pr *testpeer.Profile) {
+				pr.DeleteFunc = func(context.Context, *userv1.DeleteAccountRequest) (*userv1.DeleteAccountResponse, error) {
+					return nil, err
+				}
+			})
+		}},
 		{request{method: "GET", path: "/v1/assistant/limit", route: "/v1/assistant/limit"}, assistantv1.AssistantService_GetLimit_FullMethodName,
 			declared(400, 401, 429, 500, 503), func(p *testpeer.Peers, err error) {
 				p.Assistant.Set(func(a *testpeer.Assistant) {

@@ -19,6 +19,8 @@ var scenarios = map[string]func(*testing.T, starter){
 	"RegisterRefreshLogout": scenarioRegisterRefreshLogout,
 	"ConsentDocuments":      scenarioConsentDocuments,
 	"Profile":               scenarioProfile,
+	"ProfileMutations":      scenarioProfileMutations,
+	"ProfileDeletion":       scenarioProfileDeletion,
 	"KeyOutage":             scenarioKeyOutage,
 	"AssistantUnary":        scenarioAssistantUnary,
 	"WatchAnswer":           scenarioWatchAnswer,

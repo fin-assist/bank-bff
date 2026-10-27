@@ -68,6 +68,8 @@ type fakes struct {
 	logout      func(*userv1.LogoutRequest) (*userv1.LogoutResponse, error)
 	document    func(*userv1.GetConsentDocumentRequest) (*userv1.GetConsentDocumentResponse, error)
 	profile     func() (*userv1.GetProfileResponse, error)
+	update      func(*userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error)
+	delete      func() (*userv1.DeleteAccountResponse, error)
 	grant       func(*userv1.GrantAssistantConsentRequest) (*userv1.GrantAssistantConsentResponse, error)
 	revoke      func() (*userv1.RevokeAssistantConsentResponse, error)
 	ask         func(*assistantv1.AskQuestionRequest) (*assistantv1.AskQuestionResponse, error)
@@ -122,6 +124,14 @@ func (f *fakes) GetConsentDocument(ctx context.Context, in *userv1.GetConsentDoc
 func (f *fakes) GetProfile(ctx context.Context, _ *userv1.GetProfileRequest, _ ...grpc.CallOption) (*userv1.GetProfileResponse, error) {
 	f.deadline(ctx)
 	return must(f.t, f.profile, "profile")()
+}
+func (f *fakes) UpdateProfile(ctx context.Context, in *userv1.UpdateProfileRequest, _ ...grpc.CallOption) (*userv1.UpdateProfileResponse, error) {
+	f.deadline(ctx)
+	return must(f.t, f.update, "update")(in)
+}
+func (f *fakes) DeleteAccount(ctx context.Context, _ *userv1.DeleteAccountRequest, _ ...grpc.CallOption) (*userv1.DeleteAccountResponse, error) {
+	f.deadline(ctx)
+	return must(f.t, f.delete, "delete")()
 }
 func (f *fakes) GrantAssistantConsent(ctx context.Context, in *userv1.GrantAssistantConsentRequest, _ ...grpc.CallOption) (*userv1.GrantAssistantConsentResponse, error) {
 	f.deadline(ctx)

@@ -34,8 +34,10 @@ type ConsentClient interface {
 	GetConsentDocument(ctx context.Context, in *userv1.GetConsentDocumentRequest, opts ...grpc.CallOption) (*userv1.GetConsentDocumentResponse, error)
 }
 
-// ProfileClient is the part of user.ProfileService in the FIN-268 scope.
+// ProfileClient is user.ProfileService for REST profile reads, settings and account deletion.
 type ProfileClient interface {
+	UpdateProfile(ctx context.Context, in *userv1.UpdateProfileRequest, opts ...grpc.CallOption) (*userv1.UpdateProfileResponse, error)
+	DeleteAccount(ctx context.Context, in *userv1.DeleteAccountRequest, opts ...grpc.CallOption) (*userv1.DeleteAccountResponse, error)
 	GetProfile(ctx context.Context, in *userv1.GetProfileRequest, opts ...grpc.CallOption) (*userv1.GetProfileResponse, error)
 	GrantAssistantConsent(ctx context.Context, in *userv1.GrantAssistantConsentRequest, opts ...grpc.CallOption) (*userv1.GrantAssistantConsentResponse, error)
 	RevokeAssistantConsent(ctx context.Context, in *userv1.RevokeAssistantConsentRequest, opts ...grpc.CallOption) (*userv1.RevokeAssistantConsentResponse, error)
@@ -121,6 +123,8 @@ func (d Deps) Routes() []rest.Route {
 		{Method: http.MethodPost, Path: "/v1/auth/logout", Protected: rest.Always, Handle: d.logout},
 		{Method: http.MethodGet, Path: "/v1/consents/{type}", Protected: assistantDocument, ReplaySafe: true, Handle: d.consentDocument},
 		{Method: http.MethodGet, Path: "/v1/profile", Protected: rest.Always, ReplaySafe: true, Handle: d.profile},
+		{Method: http.MethodPatch, Path: "/v1/profile", Protected: rest.Always, ReplaySafe: true, Handle: d.updateProfile},
+		{Method: http.MethodDelete, Path: "/v1/profile", Protected: rest.Always, ReplaySafe: true, Handle: d.deleteAccount},
 		{Method: http.MethodPut, Path: "/v1/profile/assistant-consent", Protected: rest.Always, ReplaySafe: true, Handle: d.grantConsent},
 		{Method: http.MethodDelete, Path: "/v1/profile/assistant-consent", Protected: rest.Always, ReplaySafe: true, Handle: d.revokeConsent},
 		{Method: http.MethodGet, Path: "/v1/assistant/messages", Protected: rest.Always, ReplaySafe: true, Handle: d.listMessages},

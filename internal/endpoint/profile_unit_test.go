@@ -105,3 +105,75 @@ func TestUnitEnumsAndZones(t *testing.T) {
 		t.Fatal("unspecified filter values stay absent")
 	}
 }
+
+func TestUnitProfileMutations(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	calls := 0
+	var got *userv1.UpdateProfileRequest
+	u.f.update = func(in *userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error) {
+		calls++
+		got = in
+		return &userv1.UpdateProfileResponse{Profile: &userv1.Profile{UserId: "u1", Theme: userv1.Theme_THEME_DARK, Timezone: "Asia/Vladivostok", CreatedAt: ts}}, nil
+	}
+	for _, tc := range []struct {
+		body  string
+		theme *userv1.Theme
+		tz    *string
+	}{
+		{`{}`, nil, nil},
+		{`{"theme":"system"}`, userv1.Theme_THEME_SYSTEM.Enum(), nil},
+		{`{"theme":"light"}`, userv1.Theme_THEME_LIGHT.Enum(), nil},
+		{`{"theme":"dark"}`, userv1.Theme_THEME_DARK.Enum(), nil},
+		{`{"timezone":"Asia/Vladivostok"}`, nil, proto.String("Asia/Vladivostok")},
+		{`{"theme":"light","timezone":"UTC"}`, userv1.Theme_THEME_LIGHT.Enum(), proto.String("UTC")},
+		{`{"theme":"dark","Theme":"light","Timezone":"UTC"}`, userv1.Theme_THEME_DARK.Enum(), nil},
+	} {
+		r := u.serve(t, "PATCH", "/v1/profile", tc.body, nil)
+		if r.Code != 200 || r.json["theme"] != "dark" || r.json["created_at"] != "2026-10-05T05:10:00+10:00" || got == nil {
+			t.Fatalf("%s: %d %s", tc.body, r.Code, r.Body.String())
+		}
+		want := &userv1.UpdateProfileRequest{Theme: tc.theme, Timezone: tc.tz}
+		if !proto.Equal(got, want) {
+			t.Fatalf("%s: got %v, want %v", tc.body, got, want)
+		}
+	}
+	before := calls
+	for _, body := range []string{``, `{"theme":"future"}`, `{"theme":null}`, `{"timezone":null}`, `{"timezone":12}`, `[]`, `{`} {
+		if r := u.serve(t, "PATCH", "/v1/profile", body, nil); r.Code != 400 || r.code() != "VALIDATION_ERROR" {
+			t.Fatalf("%s: %d %s", body, r.Code, r.Body.String())
+		}
+	}
+	if calls != before {
+		t.Fatal("invalid patch reached user")
+	}
+	u.f.update = func(*userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error) {
+		return nil, finerr.TokenRevoked()
+	}
+	if r := u.serve(t, "PATCH", "/v1/profile", `{}`, nil); r.Code != 401 || r.code() != "TOKEN_REVOKED" {
+		t.Fatal(r.Code, r.Body.String())
+	}
+	deleted := 0
+	u.f.delete = func() (*userv1.DeleteAccountResponse, error) { deleted++; return &userv1.DeleteAccountResponse{}, nil }
+	for range 2 {
+		if r := u.serve(t, "DELETE", "/v1/profile", "", nil); r.Code != 204 || r.Body.Len() != 0 {
+			t.Fatal(r.Code, r.Body.String())
+		}
+	}
+	if deleted != 2 {
+		t.Fatal(deleted)
+	}
+	if r := u.serve(t, "DELETE", "/v1/profile", `{}`, nil); r.Code != 400 || deleted != 2 {
+		t.Fatal(r.Code, deleted)
+	}
+	u.f.delete = func() (*userv1.DeleteAccountResponse, error) {
+		return nil, finerr.RateLimited(time.Now().Add(time.Minute))
+	}
+	if r := u.serve(t, "DELETE", "/v1/profile", "", nil); r.Code != 429 {
+		t.Fatal(r.Code)
+	}
+	for _, d := range u.f.deadlines {
+		if d <= 0 || d > UnaryDeadline {
+			t.Fatal("unbounded profile mutation", d)
+		}
+	}
+}

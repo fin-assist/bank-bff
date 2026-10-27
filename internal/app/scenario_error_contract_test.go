@@ -38,6 +38,12 @@ func scenarioRequestRetryAdvice(t *testing.T, start starter) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			b.peers.Profile.Set(func(p *testpeer.Profile) {
+				p.UpdateFunc = func(context.Context, *userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error) {
+					return nil, tc.err
+				}
+				p.DeleteFunc = func(context.Context, *userv1.DeleteAccountRequest) (*userv1.DeleteAccountResponse, error) {
+					return nil, tc.err
+				}
 				p.GetFunc = func(context.Context, *userv1.GetProfileRequest) (*userv1.GetProfileResponse, error) {
 					return nil, tc.err
 				}
@@ -63,6 +69,8 @@ func scenarioRequestRetryAdvice(t *testing.T, start starter) {
 			})
 			for _, req := range []request{
 				{method: "GET", path: "/v1/profile", route: "/v1/profile"},
+				{method: "PATCH", path: "/v1/profile", route: "/v1/profile", body: `{"theme":"dark"}`},
+				{method: "DELETE", path: "/v1/profile", route: "/v1/profile"},
 				{method: "PUT", path: "/v1/profile/assistant-consent", route: "/v1/profile/assistant-consent", body: `{"version":"2026-09-28"}`},
 				{method: "DELETE", path: "/v1/profile/assistant-consent", route: "/v1/profile/assistant-consent"},
 				{method: "GET", path: "/v1/assistant/messages/a1/events", route: "/v1/assistant/messages/{answer_id}/events"},
