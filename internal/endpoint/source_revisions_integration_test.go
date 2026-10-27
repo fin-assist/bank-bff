@@ -24,6 +24,9 @@ func TestIntegrationSourceRevisionsTransportAndMapper(t *testing.T) {
 		text    string
 		unknown int
 	}{
+		{nil, []string{}, "", 0},
+		{[]assistantv1.ChangedSince{}, []string{}, "", 0},
+		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNSPECIFIED}, []string{"unverified"}, "Актуальность данных этого ответа не подтверждена", 1},
 		{[]assistantv1.ChangedSince{3}, []string{"unverified"}, "Актуальность данных этого ответа не подтверждена", 0},
 		{[]assistantv1.ChangedSince{4}, []string{"time_zone"}, "Обновились настройки часового пояса", 0},
 		{[]assistantv1.ChangedSince{99}, []string{"unverified"}, "Актуальность данных этого ответа не подтверждена", 1},
@@ -66,7 +69,11 @@ func TestIntegrationSourceRevisionsTransportAndMapper(t *testing.T) {
 		check := func(wire *assistantv1.AnswerSource) {
 			t.Helper()
 			got := convert.source(wire)
-			if !reflect.DeepEqual(got.ChangedSince, tc.want) || got.ChangedSinceText == nil || *got.ChangedSinceText != tc.text {
+			var expectedText *string
+			if tc.text != "" {
+				expectedText = &tc.text
+			}
+			if !reflect.DeepEqual(got.ChangedSince, tc.want) || !reflect.DeepEqual(got.ChangedSinceText, expectedText) {
 				t.Fatalf("source: %+v", got)
 			}
 		}

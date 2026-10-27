@@ -64,8 +64,8 @@ func encodingRequest(t *testing.T, b *bff, method, path, body string, values []s
 	return response{Response: resp, body: data, json: b.contract.Response(t, method, path, req, resp, data)}, spy.reads.Load()
 }
 
-func scenarioJSONEncoding(t *testing.T, start starter) {
-	b := start(t, nil)
+func runJSONEncodingAPI(t *testing.T) {
+	b := startBFF(t, nil)
 	b.peers.Auth.Set(func(a *testpeer.Auth) {
 		a.StartFunc = func(context.Context, *userv1.StartPhoneVerificationRequest) (*userv1.StartPhoneVerificationResponse, error) {
 			return &userv1.StartPhoneVerificationResponse{VerificationToken: "vt", CallbackNumber: "+74951234567", ExpiresAt: created, ExpiresIn: proto.Int32(300)}, nil
@@ -153,4 +153,4 @@ func scenarioJSONEncoding(t *testing.T, start starter) {
 	}
 }
 
-func TestAPIJSONEncoding(t *testing.T) { scenarioJSONEncoding(t, startBFF) }
+func TestAPIJSONEncoding(t *testing.T) { runJSONEncodingAPI(t) }

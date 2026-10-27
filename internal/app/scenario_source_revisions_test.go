@@ -15,8 +15,8 @@ import (
 
 // The same semantic source must survive history, the reconnect snapshot, and
 // an incremental source event. All three cross the real HTTP/gRPC boundary.
-func scenarioAssistantSourceRevisions(t *testing.T, start starter) {
-	b := start(t, nil)
+func runAssistantSourceRevisionsAPI(t *testing.T) {
+	b := startBFF(t, nil)
 	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
 	for _, tc := range []struct {
 		name  string
@@ -24,6 +24,9 @@ func scenarioAssistantSourceRevisions(t *testing.T, start starter) {
 		want  []any
 		text  string
 	}{
+		{"nil", nil, []any{}, ""},
+		{"empty", []assistantv1.ChangedSince{}, []any{}, ""},
+		{"unspecified", []assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNSPECIFIED}, []any{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
 		{"unverified", []assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED}, []any{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
 		{"timezone", []assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_TIME_ZONE}, []any{"time_zone"}, "Обновились настройки часового пояса"},
 		{"mixed", []assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UPLOADS, assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED, assistantv1.ChangedSince_CHANGED_SINCE_TIME_ZONE}, []any{"uploads", "unverified", "time_zone"}, "с тех пор загружались выписки. Актуальность данных этого ответа не подтверждена. Обновились настройки часового пояса"},
@@ -32,6 +35,7 @@ func scenarioAssistantSourceRevisions(t *testing.T, start starter) {
 		{"already-unverified", []assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED, 99}, []any{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			before := b.analyticsCounter(t, "finassist_untranslated_code_total", "AnswerSource.changed_since", "unknown")
 			src := &assistantv1.AnswerSource{CalculatedAt: created, TransferMode: commonv1.TransferMode_TRANSFER_MODE_WITHOUT, ChangedSince: tc.codes}
 			b.peers.Assistant.Set(func(a *testpeer.Assistant) {
 				a.ListFunc = func(context.Context, *assistantv1.ListMessagesRequest) (*assistantv1.ListMessagesResponse, error) {
@@ -53,7 +57,12 @@ func scenarioAssistantSourceRevisions(t *testing.T, start starter) {
 			check := func(value any) {
 				t.Helper()
 				s := value.(map[string]any)
-				if !reflect.DeepEqual(s["changed_since"], tc.want) || s["changed_since_text"] != tc.text {
+				var expectedText any
+				if tc.text != "" {
+					expectedText = tc.text
+				}
+				text, present := s["changed_since_text"]
+				if !reflect.DeepEqual(s["changed_since"], tc.want) || !present || text != expectedText {
 					t.Fatalf("source: %#v", s)
 				}
 			}
@@ -70,6 +79,10 @@ func scenarioAssistantSourceRevisions(t *testing.T, start starter) {
 			}
 			check(events[0].Data["source"])
 			check(events[1].Data)
+			after := b.analyticsCounter(t, "finassist_untranslated_code_total", "AnswerSource.changed_since", "unknown")
+			if (tc.name == "nil" || tc.name == "empty") && after != before || tc.name == "unspecified" && after != before+3 {
+				t.Fatalf("empty/unspecified metric %v -> %v", before, after)
+			}
 			for _, body := range []string{string(list.body), string(got.body)} {
 				if strings.Contains(body, "data_revisions") || strings.Contains(body, "changed_at") {
 					t.Fatalf("internal provenance leaked: %s", body)
@@ -79,4 +92,4 @@ func scenarioAssistantSourceRevisions(t *testing.T, start starter) {
 	}
 }
 
-func TestAPIAssistantSourceRevisions(t *testing.T) { scenarioAssistantSourceRevisions(t, startBFF) }
+func TestAPIAssistantSourceRevisions(t *testing.T) { runAssistantSourceRevisionsAPI(t) }

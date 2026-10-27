@@ -2,10 +2,12 @@ package app
 
 import "testing"
 
-// Every scenario runs at two levels: integration (the public API assembly on an
+// Scenarios in this legacy shared table run at two levels: integration (the public API assembly on an
 // httptest TCP server) and API (the complete Run with both listeners). Both send
 // real HTTP and reach the peers over gRPC on bufconn; every non-SSE answer is
 // validated against openapi.yaml and every SSE event against its x-sse-events schema.
+// New FIN-368/FIN-339 source and encoding flows are API-only helpers without a
+// starter parameter; their component integrations are separate from this table.
 var scenarios = map[string]func(*testing.T, starter){
 	"OperationMutationTransportLoss": scenarioOperationMutationTransportLoss,
 	"OperationOtherMalformed":        scenarioOperationOtherMalformed,

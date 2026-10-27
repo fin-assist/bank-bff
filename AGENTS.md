@@ -86,8 +86,11 @@ production module, using pinned go-test-coverage v2.20.1 with agreed 79.95% -> 8
 No excluded packages/helpers/generated files for percentages. Combined is informational only.
 Test names start TestUnit…, TestIntegration… or TestAPI… (fuzz targets FuzzUnit… etc.); make test-names
 checks race-enabled Test/Fuzz/Example inventory before each collector and rejects Example (FIN-290).
-Integration and API share the scenarios of internal/app/scenarios_test.go: integration assembles
+Legacy scenarios in internal/app/scenarios_test.go are shared: integration assembles
 newPublicAPI behind httptest, API runs app.Run; every response is validated with testpeer.Contract.
+New FIN-368/FIN-339 source/encoding flows are explicitly API-only helpers without a starter
+parameter. Their integration tests compose transport/mapper or HTTP/JWT/rest/probe-RPC
+components separately and never call the full public API assembly.
 Existing jq guards reject empty/skipped/failed suites and absent, empty, header-only or zero-statement profiles. Missing coverage fails required go; no service N/A.
 Network/TCP tests must actually bind and exchange HTTP; permission errors are failures, not skips.
 This stateless scaffold requires no PostgreSQL. Future real database functionality must use real

@@ -7,6 +7,50 @@ import (
 	"testing"
 )
 
+// Audit every operation in the embedded contract, including inherited headers,
+// against the actual switch. A future contract copy must not silently add a JSON
+// identity-encoding policy that the pre-body transport guard does not enforce.
+func TestUnitJSONEncodingTargetsMatchEntireContract(t *testing.T) {
+	s := spec(t)
+	doc := operation(t, "GET", "/v1/profile").Route.Spec
+	operations, declarations, targets := 0, 0, 0
+	for path, item := range doc.Paths.Map() {
+		for method, declared := range item.Operations() {
+			operations++
+			policy := false
+			parameters := append(item.Parameters[:0:0], item.Parameters...)
+			parameters = append(parameters, declared.Parameters...)
+			for _, parameter := range parameters {
+				isRef := parameter.Ref == "#/components/parameters/ContentEncodingIdentity"
+				isHeader := parameter.Value != nil && parameter.Value.In == "header" && strings.EqualFold(parameter.Value.Name, "Content-Encoding")
+				if isRef && !isHeader {
+					t.Fatalf("%s %s: identity reference is not a Content-Encoding header", method, path)
+				}
+				policy = policy || isRef || isHeader
+			}
+			op, err := s.Operation(method, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(method, "/", nil)
+			req.Header.Set("Content-Encoding", "gzip")
+			guarded := jsonEncodingRefusal(req, op) != nil
+			if policy != guarded {
+				t.Fatalf("%s %s: contract encoding policy %v, pre-body guard %v", method, path, policy, guarded)
+			}
+			if policy {
+				declarations++
+			}
+			if guarded {
+				targets++
+			}
+		}
+	}
+	if operations == 0 || declarations != 6 || targets != 6 {
+		t.Fatalf("encoding audit: %d operations, %d declared, %d guarded", operations, declarations, targets)
+	}
+}
+
 type encodingReadSpy struct {
 	io.Reader
 	reads, closes int

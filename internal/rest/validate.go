@@ -29,6 +29,7 @@ func TooLarge() Error {
 // jsonEncodingRefusal implements FIN-339 only for its six agreed JSON operations.
 // A repeated header is invalid even when both tokens are identity. HTTP OWS is
 // normalized by net/http; trim SP/HTAB here as well for in-process callers.
+// Accepted OWS is normalized in the shared request Header before schema validation.
 func jsonEncodingRefusal(r *http.Request, op apispec.Operation) *Error {
 	switch op.Route.Operation.OperationID {
 	case "startPhoneVerification", "register", "refreshTokens", "logout", "grantAssistantConsent", "askAssistant":

@@ -16,6 +16,9 @@ func TestUnitSourceRevisionStatuses(t *testing.T) {
 		want  []string
 		text  string
 	}{
+		{nil, []string{}, ""},
+		{[]assistantv1.ChangedSince{}, []string{}, ""},
+		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNSPECIFIED}, []string{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
 		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED}, []string{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
 		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_TIME_ZONE}, []string{"time_zone"}, "Обновились настройки часового пояса"},
 		{[]assistantv1.ChangedSince{99}, []string{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
@@ -23,6 +26,7 @@ func TestUnitSourceRevisionStatuses(t *testing.T) {
 		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED, 99, 99}, []string{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
 		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_CATEGORIES, assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED, assistantv1.ChangedSince_CHANGED_SINCE_TIME_ZONE}, []string{"categories", "unverified", "time_zone"}, "с тех пор категории менялись. Актуальность данных этого ответа не подтверждена. Обновились настройки часового пояса"},
 	} {
+		before := unitAnalyticsCounter(t, u, "AnswerSource.changed_since", "unknown")
 		u.f.list = func(*assistantv1.ListMessagesRequest) (*assistantv1.ListMessagesResponse, error) {
 			return &assistantv1.ListMessagesResponse{TimeZone: "Europe/Moscow", Messages: []*assistantv1.Message{{Id: "a1", Role: assistantv1.Role_ROLE_ASSISTANT, Status: assistantv1.AnswerStatus_ANSWER_STATUS_COMPLETE, CreatedAt: ts, Currency: "RUB", Source: &assistantv1.AnswerSource{CalculatedAt: ts, ChangedSince: tc.codes}}}}, nil
 		}
@@ -35,8 +39,17 @@ func TestUnitSourceRevisionStatuses(t *testing.T) {
 		for i, s := range tc.want {
 			want[i] = s
 		}
-		if !reflect.DeepEqual(got["changed_since"], want) || got["changed_since_text"] != tc.text {
+		var expectedText any
+		if tc.text != "" {
+			expectedText = tc.text
+		}
+		text, present := got["changed_since_text"]
+		if !reflect.DeepEqual(got["changed_since"], want) || !present || text != expectedText {
 			t.Fatalf("%#v", got)
+		}
+		after := unitAnalyticsCounter(t, u, "AnswerSource.changed_since", "unknown")
+		if len(tc.codes) == 0 && after != before || len(tc.codes) == 1 && tc.codes[0] == assistantv1.ChangedSince_CHANGED_SINCE_UNSPECIFIED && after != before+1 {
+			t.Fatalf("unspecified/empty metric: %v -> %v", before, after)
 		}
 	}
 }
