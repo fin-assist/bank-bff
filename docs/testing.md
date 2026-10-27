@@ -30,3 +30,30 @@ ImportShutdown проверяет начатую upload-загрузку чер�
 ImportMultipartEdges наблюдает синхронную инициацию реального gRPC client stream: запаздывающий dispatch предыдущего отменённого запроса не может исказить проверку отсутствия RPC у следующей неверной формы. Отмена уже начатого truncated-запроса проверяется отдельно; реальный HTTP/bufconn и проверки отсутствия фиксации сохранены.
 
 FIN-361: `ProfileMutations` на обоих транспортных уровнях проверяет `{}`, каждую тему, отдельный и совместный `timezone`, presence в сериализованном protobuf, точные имена полей, ответ и смещение времени, metadata и unary-дедлайн. Некорректные типы/null/тема/JSON/Content-Type отклоняются до RPC; неверный IANA-пояс возвращает безопасный структурированный `VALIDATION_ERROR` сервиса. `ProfileDeletion` проверяет пустой 204 и повтор с живым токеном, последующий `TOKEN_REVOKED`, независимость другого токена, отказ тела и неверных/чужих/просроченных токенов до RPC. `OperationErrors`, `RequestRetryAdvice`, `Gates` и `Maintenance` включают оба новых маршрута: ошибки реестра и неизвестные ошибки, explicit advice (PATCH остаётся retryable=false), версия клиента и техработы. Unit-тест сверяет map тем с enum встроенного OpenAPI и проверяет закрытый отказ до RPC при дрейфе схемы. Это bufconn-фейки `user`, а не доказательство его SQL/lifecycle/outbox; фактическая доставка удаления соседям проверяется отдельно в FIN-362.
+
+FIN-360: `Analytics`, `AnalyticsPeriods`, `AnalyticsErrors` выполняются как integration и API по настоящим
+HTTP и gRPC/bufconn. Проверяются month/quarter/year, точный period_key, оба transfer_mode, supports/exp,
+verified service/user identity и allowlist metadata/read-primary, unary deadline, отсутствие user_id из query,
+полная открытая проекция всех примитивов и вложенного Struct, фильтры/selection, денежные значения,
+неизвестные коды, наносекунды и смещение времени, gaps/navigation/state, ready/tentative/locked/none/unavailable,
+пустые списки и has_data=false. Пустые currency и верхний lock имеют контрактные fallback; вложенный lock
+не меняется. Ошибки400/401/429/500 и транспортный сбой, explicit retry advice/Retry-After, недоверенный токен,
+неверная query/body до RPC проверяются на обоих уровнях; Gates/Maintenance включают оба GET.
+Unit покрывает преобразования/presence, malformed syntax/overflow, неизвестный обязательный enum и неполный
+ответ сервиса, все новые config/startup ветки. Реальные снимки/формулы/SQL analytics не подменяются этими
+фейками: они проверяются самим analytics, полная stage-цепочка — FIN-362.
+
+Ревью FIN-360: `AnalyticsMalformed` на обоих транспортных уровнях и соответствующие unit-кейсы проверяют
+отсутствующие/невалидные required Timestamp и диапазоны (включая gaps и ListPeriods), точные поля/codes
+диагностики и безопасный INTERNAL_ERROR. Unknown coverage имеет fallback partial и ограниченный счётчик.
+Полученные пустые currency/верхний lock.text считаются даже перед отказом другого поля; legacy MetricLock.text
+остаётся нулём, вложенный Struct не исследуется. Binary protobuf roundtrip с NaN/±Inf проходит gRPC и HTTP:
+Struct.AsMap преобразует их в строки NaN/Infinity/-Infinity, тело200 остаётся корректным JSON.
+
+`AnalyticsEnvelope` и unit-регрессии проверяют формат каждого календарного ключа (params, periods,
+присутствующие navigation), каждый optional Timestamp при наличии и отсутствие optional без подстановки.
+Неполные ListPeriods закрепляют точные пары field/code и прирост счётчика на всех трёх уровнях.
+
+`AnalyticsLocalYearZero` и соответствующий unit-кейс сохраняют валидный UTC0001 в поясе Etc/GMT+5
+как RFC3339 год0000 с offset -05:00, включая required state и optional lock/filter; ответ валиден по OpenAPI
+и не увеличивает invalid. Присутствующая пустая optional-навигация имеет invalid; nil остаётся отсутствием.

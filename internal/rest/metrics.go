@@ -7,8 +7,10 @@ import (
 )
 
 // Fields of finassist_empty_required_field_total that this BFF serves
-// (grpc-api.md 5.3); each gets a zero series at startup.
-var emptyRequiredFields = []string{"Message.currency", "AnswerSnapshot.currency"}
+// (grpc-api.md 5.3); each gets a zero series at startup. MetricLock.text is a
+// legacy typed metric, no longer served here, so it remains zero. Nested TileLock
+// fields inside opaque Struct data are never inspected or counted by the BFF.
+var emptyRequiredFields = []string{"Block.lock.text", "MetricLock.text", "GetAnalyticsResponse.currency", "Message.currency", "AnswerSnapshot.currency"}
 
 // Metrics are the BFF metrics of the public API. Labels are bounded: routes are
 // patterns, codes are registry names or "other", client versions are capped.
@@ -43,7 +45,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		}, []string{"reason", "grpc_code"}),
 		untranslated: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "finassist_untranslated_code_total",
-			Help: "Service values bank-bff cannot translate to a REST code or text.",
+			Help: "Service values bank-bff cannot translate to a REST code or text, or typed service fields that are absent/invalid.",
 		}, []string{"field", "code"}),
 		empty: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "finassist_empty_required_field_total",
@@ -71,7 +73,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 	return m, nil
 }
 
-// Untranslated counts a service value without a REST code or text. code must be bounded.
+// Untranslated counts unknown values and absent/invalid typed service fields. code must be bounded.
 func (m *Metrics) Untranslated(field, code string) {
 	if m != nil {
 		m.untranslated.WithLabelValues(field, code).Inc()

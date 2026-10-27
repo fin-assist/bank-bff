@@ -63,7 +63,7 @@ func apiConfig(stage testpeer.StageFiles) config.Config {
 		Service: "bank-bff", Env: "stage", PublicAddr: "127.0.0.1:0", HTTPAddr: "127.0.0.1:0", LogFormat: "json",
 		ShutdownTimeout: 2 * time.Second,
 		API: config.API{
-			Enabled: true, UserAddr: testpeer.Target, AssistantAddr: testpeer.Target, StatementsAddr: testpeer.Target,
+			Enabled: true, UserAddr: testpeer.Target, AssistantAddr: testpeer.Target, StatementsAddr: testpeer.Target, AnalyticsAddr: testpeer.Target,
 			UserIssuer: testpeer.UserIssuer, UserAudience: testpeer.UserAudience,
 			Stage:       config.Stage{Issuer: testpeer.StageIssuer, SigningKeyFile: stage.SigningKeyFile, PublicKeysFile: stage.PublicKeysFile},
 			MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}},

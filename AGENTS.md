@@ -4,7 +4,7 @@
 `fin-assist/go-service-template` main 6ea35ce (FIN-246) in FIN-261. Read README.md first.
 FIN-268 (FIN-331) serves 14 public REST/SSE operations of auth, consents, profile reads/assistant
 consent and the assistant; FIN-342 adds six import operations, FIN-361 adds PATCH/DELETE profile
-(22 operations total, docs/server.md). Every other contract operation answers 404 until its task.
+and FIN-360 adds analytics/period reads (24 operations total, docs/server.md). Every other contract operation answers 404 until its task.
 Do not invent REST fields, RPCs or error codes.
 Contracts live in `fin-assist/contracts`: docs/api.md, openapi/openapi.yaml, docs/grpc-api.md.
 The owner's latest decision and contracts take precedence over copied template assumptions.
@@ -16,9 +16,9 @@ The owner's latest decision and contracts take precedence over copied template a
   api.go builds the public API (embedded contract, go-identity Assembly, go-grpc peers) before bind.
 - internal/rest: request ID, gates (MAINTENANCE, X-Client-Version), auth, body limit and kin-openapi
   validation, finerr.ToREST translation and whole-request retry safety, SSE pump/limits, metrics and access log.
-- internal/endpoint: the 22 operations, REST <-> gRPC conversion; internal/catalog: user_message and
+- internal/endpoint: the 24 operations, REST <-> gRPC conversion; internal/catalog: user_message and
   severity texts (FIN-225); internal/apispec: embedded openapi.yaml copy with its contracts commit.
-- internal/testpeer: test infrastructure only — bufconn fakes of user/assistant, keys, contract checks.
+- internal/testpeer: test infrastructure only — bufconn fakes of user/assistant/statements/analytics, keys, contract checks.
 - internal/config: all environment settings in Vars; docs/config.md table is checked by tests.
 - internal/ops: private health/readiness and Prometheus Go/process metrics.
 - docs/server.md and docs/testing.md: lifecycle and test scope.
@@ -115,10 +115,19 @@ Security: authorization boundaries, private operational listener, no data leakag
 shutdown, startup failure cleanup, trusted metadata, safe CI and fork permissions.
 Tests: meaningful behavior coverage at all three levels; real HTTP API and transport dependencies;
 negative startup/shutdown scenarios; unchanged strict guards and independent total80.
-Only the 22 FIN-268/FIN-342/FIN-361 operations exist; do not require absent handlers solely to increase coverage, and do
+Only the 24 FIN-268/FIN-342/FIN-361/FIN-360 operations exist; do not require absent handlers solely to increase coverage, and do
 not treat passing tests as implementing unimplemented contract operations. Each served operation needs
 API tests for success, its declared errors, token, Idempotency-Key, schema, client version and SSE.
 
 ## Stage artifacts (FIN-148)
 
 `scripts/stage_artifact.py` extracts the binary from the smoke-tested image; `docs/stage-artifacts.md` describes provenance, checks and retention. Keep its Python tests and CI image job in sync. Artifacts do not authorize deployment; only a successful main push CI is eligible for stage. GHCR/production delivery is still pending.
+
+## Analytics reads (FIN-360)
+
+`ANALYTICS_GRPC_ADDR` is required in stage/prod. Both analytics reads are protected, bounded unary calls,
+retry-safe only with explicit service advice. The service chooses periods, blocks, texts and states;
+BFF forwards `date` as `period_key`, `supports` and `exp`. Unknown request period/transfer codes and malformed
+`type@positive-int32`/`key:variant` syntax fail with 400. Unknown primitive/status/reason/action strings and
+Struct data pass through unchanged; do not inspect or rewrite nested data. Top-level empty lock text gets
+«Пока недоступно» and a counter; empty currency gets RUB only when has_data=true (FIN-98).

@@ -26,7 +26,7 @@ func TestAPICommandServesThePublicAPIInStage(t *testing.T) {
 			return &userv1.GetProfileResponse{Profile: &userv1.Profile{UserId: "u1", Phone: "+79001234567", Theme: userv1.Theme_THEME_DARK, Timezone: "Europe/Moscow"}}, nil
 		}
 	})
-	for k, v := range map[string]string{"ENV": "stage", "USER_GRPC_ADDR": target, "ASSISTANT_GRPC_ADDR": target, "STATEMENTS_GRPC_ADDR": target, "AUTH_USER_ISSUER": testpeer.UserIssuer,
+	for k, v := range map[string]string{"ENV": "stage", "USER_GRPC_ADDR": target, "ASSISTANT_GRPC_ADDR": target, "ANALYTICS_GRPC_ADDR": target, "STATEMENTS_GRPC_ADDR": target, "AUTH_USER_ISSUER": testpeer.UserIssuer,
 		"AUTH_USER_AUDIENCE": testpeer.UserAudience, "AUTH_STAGE_ISSUER": testpeer.StageIssuer, "AUTH_STAGE_SIGNING_KEY_FILE": stage.SigningKeyFile,
 		"AUTH_STAGE_PUBLIC_KEYS_FILE": stage.PublicKeysFile, "CLIENT_MIN_VERSIONS": "android=0.2.5"} {
 		t.Setenv(k, v)

@@ -132,7 +132,7 @@ func TestUnitHistoryMapsMessages(t *testing.T) {
 	if unknownStatus["status"] != "failed" || unknownStatus["error_code"] != nil || unknownStatus["error_user_message"] == nil {
 		t.Fatalf("unknown status: %v", unknownStatus)
 	}
-	if n, _ := testutil.GatherAndCount(u.reg, "finassist_empty_required_field_total"); n != 2 {
+	if n, _ := testutil.GatherAndCount(u.reg, "finassist_empty_required_field_total"); n != 5 {
 		t.Fatalf("zero series: %d", n)
 	}
 	// An empty currency is replaced by RUB and counted (grpc-api.md 5.3).
