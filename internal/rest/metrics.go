@@ -7,7 +7,9 @@ import (
 )
 
 // Fields of finassist_empty_required_field_total that this BFF serves
-// (grpc-api.md 5.3); each gets a zero series at startup.
+// (grpc-api.md 5.3); each gets a zero series at startup. MetricLock.text is a
+// legacy typed metric, no longer served here, so it remains zero. Nested TileLock
+// fields inside opaque Struct data are never inspected or counted by the BFF.
 var emptyRequiredFields = []string{"Block.lock.text", "MetricLock.text", "GetAnalyticsResponse.currency", "Message.currency", "AnswerSnapshot.currency"}
 
 // Metrics are the BFF metrics of the public API. Labels are bounded: routes are

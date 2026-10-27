@@ -2,9 +2,13 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"math"
+	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -172,7 +176,10 @@ func scenarioAnalyticsPeriods(t *testing.T, start starter) {
 		if r.StatusCode != 200 || len(r.json["periods"].([]any)) != 2 || r.json["periods"].([]any)[0].(map[string]any)["coverage"] != "complete" || r.json["periods"].([]any)[1].(map[string]any)["coverage"] != "partial" {
 			t.Fatal(string(r.body))
 		}
-		lastCall(t, b, analyticsv1.AnalyticsService_ListPeriods_FullMethodName, access, "")
+		call := lastCall(t, b, analyticsv1.AnalyticsService_ListPeriods_FullMethodName, access, "")
+		if values := call.MD.Get("x-read-primary"); len(values) != 1 || values[0] != "1" {
+			t.Fatal("missing periods read-primary", call.MD)
+		}
 	}
 	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
 		a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
@@ -243,12 +250,169 @@ func scenarioAnalyticsErrors(t *testing.T, start starter) {
 		}
 	})
 	r := b.do(t, request{method: "GET", path: "/v1/analytics", route: "/v1/analytics", header: auth})
-	if r.StatusCode != 500 {
+	if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || strings.Contains(string(r.body), "SECRET_SQL") {
 		t.Fatal(string(r.body))
 	}
-	// Error JSON remains the common contract envelope, not a serialized proto error.
-	var body map[string]any
-	if err := json.Unmarshal(r.body, &body); err != nil {
+	if got := b.analyticsCounter(t, "finassist_untranslated_code_total", "GetAnalyticsResponse.params.period", "unknown"); got != 1 {
+		t.Fatal("unknown period metric", got)
+	}
+}
+
+// analyticsCounter observes the real integration registry or private API metrics
+// listener. It never requests the public listener's operational endpoints.
+func (b *bff) analyticsCounter(t *testing.T, name, field, code string) float64 {
+	t.Helper()
+	if b.registry != nil {
+		families, err := b.registry.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, family := range families {
+			if family.GetName() != name {
+				continue
+			}
+			for _, metric := range family.Metric {
+				labels := map[string]string{}
+				for _, label := range metric.Label {
+					labels[label.GetName()] = label.GetValue()
+				}
+				if labels["field"] == field && labels["code"] == code {
+					return metric.GetCounter().GetValue()
+				}
+			}
+		}
+		return 0
+	}
+	req, err := http.NewRequestWithContext(t.Context(), "GET", "http://"+b.operational+"/metrics", nil)
+	if err != nil {
 		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := fmt.Sprintf("field=%s", strconv.Quote(field))
+	if code != "" {
+		labels = fmt.Sprintf("code=%s,", strconv.Quote(code)) + labels
+	}
+	prefix := name + "{" + labels + "} "
+	for _, line := range strings.Split(string(body), "\n") {
+		if value, ok := strings.CutPrefix(line, prefix); ok {
+			n, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+	}
+	return 0
+}
+
+func scenarioAnalyticsMalformed(t *testing.T, start starter) {
+	b := start(t, nil)
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	cases := []struct {
+		field, code string
+		mutate      func(*analyticsv1.GetAnalyticsResponse)
+	}{
+		{"GetAnalyticsResponse.params", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Params = nil }},
+		{"GetAnalyticsResponse.params.period_key", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Params.PeriodKey = "" }},
+		{"GetAnalyticsResponse.state", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.State = nil }},
+		{"GetAnalyticsResponse.period", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period = nil }},
+		{"GetAnalyticsResponse.period.bounds", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds = nil }},
+		{"GetAnalyticsResponse.period.range", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range = nil }},
+		{"GetAnalyticsResponse.period.range.from", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range.Start = nil }},
+		{"GetAnalyticsResponse.period.range.to", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range.End = nil }},
+		{"GetAnalyticsResponse.period.range.from", "invalid", func(r *analyticsv1.GetAnalyticsResponse) {
+			r.Period.Range.Start = &timestamppb.Timestamp{Seconds: 253402300800}
+		}},
+		{"GetAnalyticsResponse.state.data_from", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.State.DataFrom = nil }},
+		{"GetAnalyticsResponse.state.data_to", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.State.DataTo = nil }},
+		{"GetAnalyticsResponse.state.calculated_at", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.State.CalculatedAt = nil }},
+		{"GetAnalyticsResponse.period.bounds.gaps.from", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds.Gaps = []*commonv1.TimeRange{{}} }},
+		{"GetAnalyticsResponse.period.bounds.gaps.to", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds.Gaps[0].End = nil }},
+	}
+	for _, tc := range cases {
+		in := analyticsMessage(t)
+		in.Currency = ""
+		tc.mutate(in)
+		before := b.analyticsCounter(t, "finassist_untranslated_code_total", tc.field, tc.code)
+		currencyBefore := b.analyticsCounter(t, "finassist_empty_required_field_total", "GetAnalyticsResponse.currency", "")
+		locksBefore := b.analyticsCounter(t, "finassist_empty_required_field_total", "Block.lock.text", "")
+		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+				return in, nil
+			}
+		})
+		r := b.do(t, request{method: "GET", path: "/v1/analytics", route: "/v1/analytics", header: auth})
+		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || strings.Contains(string(r.body), "1970-") {
+			t.Fatal(r.StatusCode, string(r.body))
+		}
+		if b.analyticsCounter(t, "finassist_untranslated_code_total", tc.field, tc.code) != before+1 {
+			t.Fatal("required field diagnostic", tc.field, tc.code)
+		}
+		if b.analyticsCounter(t, "finassist_empty_required_field_total", "GetAnalyticsResponse.currency", "") != currencyBefore+1 || b.analyticsCounter(t, "finassist_empty_required_field_total", "Block.lock.text", "") != locksBefore+1 {
+			t.Fatal("empty service fields must count before unrelated rejection")
+		}
+	}
+	for _, mutate := range []func(*analyticsv1.PeriodItem){func(p *analyticsv1.PeriodItem) { p.Range = nil }, func(p *analyticsv1.PeriodItem) { p.Range.Start = nil }, func(p *analyticsv1.PeriodItem) { p.Range.End = nil }, func(p *analyticsv1.PeriodItem) { p.Range.End = &timestamppb.Timestamp{Nanos: -1} }} {
+		in := &analyticsv1.PeriodItem{Key: "2026", Range: analyticsMessage(t).Period.Range}
+		mutate(in)
+		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
+				return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{in}}, nil
+			}
+		})
+		r := b.do(t, request{method: "GET", path: "/v1/analytics/periods", route: "/v1/analytics/periods", header: auth})
+		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" {
+			t.Fatal(r.StatusCode, string(r.body))
+		}
+	}
+	// Nonfinite binary protobuf numbers are deliberately converted to the documented
+	// Struct.AsMap string representation, not a JSON encoding error or empty 200.
+	in := analyticsMessage(t)
+	in.Blocks = []*commonv1.Block{{Type: "future", V: 1, Data: &structpb.Struct{Fields: map[string]*structpb.Value{"nan": structpb.NewNumberValue(math.NaN()), "inf": structpb.NewNumberValue(math.Inf(1)), "negative_inf": structpb.NewNumberValue(math.Inf(-1))}}}}
+	wire, err := proto.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := &analyticsv1.GetAnalyticsResponse{}
+	if err := proto.Unmarshal(wire, decoded); err != nil {
+		t.Fatal(err)
+	}
+	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+		a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+			return decoded, nil
+		}
+	})
+	r := b.do(t, request{method: "GET", path: "/v1/analytics", route: "/v1/analytics", header: auth})
+	if r.StatusCode != 200 || !reflect.DeepEqual(r.json["blocks"].([]any)[0].(map[string]any)["data"], map[string]any{"nan": "NaN", "inf": "Infinity", "negative_inf": "-Infinity"}) {
+		t.Fatal(r.StatusCode, string(r.body))
+	}
+	// Both enum fallback sites emit bounded diagnostics while preserving partial.
+	in = analyticsMessage(t)
+	in.Period.Bounds.Coverage = commonv1.Coverage(99)
+	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+		a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+			return in, nil
+		}
+		a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
+			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "2026", Range: in.Period.Range, Coverage: commonv1.Coverage(99)}}}, nil
+		}
+	})
+	for _, p := range []struct{ path, field string }{{"/v1/analytics", "GetAnalyticsResponse.period.bounds.coverage"}, {"/v1/analytics/periods", "ListPeriodsResponse.periods.coverage"}} {
+		before := b.analyticsCounter(t, "finassist_untranslated_code_total", p.field, "unknown")
+		r := b.do(t, request{method: "GET", path: p.path, route: p.path, header: auth})
+		if r.StatusCode != 200 || b.analyticsCounter(t, "finassist_untranslated_code_total", p.field, "unknown") != before+1 {
+			t.Fatal(p.path, r.StatusCode, string(r.body))
+		}
+	}
+	if got := b.analyticsCounter(t, "finassist_empty_required_field_total", "MetricLock.text", ""); got != 0 {
+		t.Fatal("legacy typed MetricLock must remain zero", got)
 	}
 }

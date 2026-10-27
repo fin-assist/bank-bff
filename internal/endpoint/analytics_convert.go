@@ -3,6 +3,7 @@ package endpoint
 import (
 	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type analyticsResponse struct {
@@ -76,10 +77,11 @@ type analyticsAction struct {
 	Label     *string           `json:"label,omitempty"`
 }
 
-func coverageCode(v commonv1.Coverage) string {
+func (c converter) coverageCode(v commonv1.Coverage, field string) string {
 	if value, ok := enumCode(v); ok {
 		return value
 	}
+	c.metrics.Untranslated(field, "unknown")
 	return "partial"
 }
 
@@ -110,20 +112,57 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 	if !out.HasData {
 		return out, true
 	}
-	params, ok := analyticsParams(resp.GetParams())
-	if !ok {
-		c.metrics.Untranslated("GetAnalyticsResponse.params.period", "unknown")
+	// grpc-api 5.3 counts each empty required field of a received response even
+	// when another invalid field makes the final REST response fail closed.
+	out.Currency = c.currency(resp.GetCurrency(), "GetAnalyticsResponse.currency")
+	blocks := make([]analyticsBlock, 0, len(resp.GetBlocks()))
+	for _, block := range resp.GetBlocks() {
+		blocks = append(blocks, c.analyticsBlock(block))
+	}
+	out.Blocks = &blocks
+	pms := resp.GetParams()
+	if pms == nil {
+		return c.analyticsInvalid("GetAnalyticsResponse.params", "absent")
+	}
+	if _, ok := enumCode(pms.GetPeriod()); !ok {
+		return c.analyticsInvalid("GetAnalyticsResponse.params.period", "unknown")
+	}
+	if pms.GetPeriodKey() == "" {
+		return c.analyticsInvalid("GetAnalyticsResponse.params.period_key", "absent")
+	}
+	out.Params, _ = analyticsParams(pms)
+	if resp.GetPeriod() == nil {
+		return c.analyticsInvalid("GetAnalyticsResponse.period", "absent")
+	}
+	if resp.GetState() == nil {
+		return c.analyticsInvalid("GetAnalyticsResponse.state", "absent")
+	}
+	if !c.analyticsRange(resp.GetPeriod().GetRange(), "GetAnalyticsResponse.period.range") {
 		return analyticsResponse{}, false
 	}
-	out.Params = params
-	out.Currency = c.currency(resp.GetCurrency(), "GetAnalyticsResponse.currency")
-	if resp.GetPeriod() == nil || resp.GetState() == nil || resp.GetPeriod().GetRange() == nil {
-		return analyticsResponse{}, false
+	if resp.GetPeriod().GetBounds() == nil {
+		return c.analyticsInvalid("GetAnalyticsResponse.period.bounds", "absent")
+	}
+	state := resp.GetState()
+	for _, f := range []struct {
+		value *timestamppb.Timestamp
+		field string
+	}{
+		{state.GetDataFrom(), "GetAnalyticsResponse.state.data_from"},
+		{state.GetDataTo(), "GetAnalyticsResponse.state.data_to"},
+		{state.GetCalculatedAt(), "GetAnalyticsResponse.state.calculated_at"},
+	} {
+		if !c.analyticsMoment(f.value, f.field) {
+			return analyticsResponse{}, false
+		}
 	}
 	p := resp.GetPeriod()
 	bounds := p.GetBounds()
-	out.Period = &analyticsPeriod{Range: timeRange(p.GetRange(), c.loc), IsCurrent: p.GetIsCurrent(), Coverage: coverageCode(bounds.GetCoverage()), DataFrom: optionalMoment(bounds.GetDataFrom(), c.loc), DataTo: optionalMoment(bounds.GetDataTo(), c.loc), Gaps: []*Range{}}
+	out.Period = &analyticsPeriod{Range: timeRange(p.GetRange(), c.loc), IsCurrent: p.GetIsCurrent(), Coverage: c.coverageCode(bounds.GetCoverage(), "GetAnalyticsResponse.period.bounds.coverage"), DataFrom: optionalMoment(bounds.GetDataFrom(), c.loc), DataTo: optionalMoment(bounds.GetDataTo(), c.loc), Gaps: []*Range{}}
 	for _, gap := range bounds.GetGaps() {
+		if !c.analyticsRange(gap, "GetAnalyticsResponse.period.bounds.gaps") {
+			return analyticsResponse{}, false
+		}
 		out.Period.Gaps = append(out.Period.Gaps, timeRange(gap, c.loc))
 	}
 	n := resp.GetNavigation()
@@ -131,12 +170,34 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 	if n != nil {
 		out.Navigation.Previous, out.Navigation.Next = n.Previous, n.Next
 	}
-	blocks := make([]analyticsBlock, 0, len(resp.GetBlocks()))
-	for _, block := range resp.GetBlocks() {
-		blocks = append(blocks, c.analyticsBlock(block))
-	}
-	out.Blocks = &blocks
 	s := resp.GetState()
 	out.State = &analyticsState{Stale: s.GetStale(), LastOperationAt: optionalMoment(s.GetLastOperationAt(), c.loc), DataFrom: moment(s.GetDataFrom(), c.loc), DataTo: moment(s.GetDataTo(), c.loc), FullMonths: s.GetFullMonths(), UnreadLinesCount: s.GetUnreadLinesCount(), CalculatedAt: moment(s.GetCalculatedAt(), c.loc), Recalculating: s.GetRecalculating()}
 	return out, true
+}
+
+func (c converter) analyticsInvalid(field, code string) (analyticsResponse, bool) {
+	c.metrics.Untranslated(field, code)
+	return analyticsResponse{}, false
+}
+
+// analyticsMoment rejects absent or invalid required instants instead of inventing
+// Unix epoch through Timestamp.AsTime. Field labels come only from call-site constants.
+func (c converter) analyticsMoment(value *timestamppb.Timestamp, field string) bool {
+	if value == nil {
+		c.metrics.Untranslated(field, "absent")
+		return false
+	}
+	if value.CheckValid() != nil {
+		c.metrics.Untranslated(field, "invalid")
+		return false
+	}
+	return true
+}
+
+func (c converter) analyticsRange(value *commonv1.TimeRange, field string) bool {
+	if value == nil {
+		c.metrics.Untranslated(field, "absent")
+		return false
+	}
+	return c.analyticsMoment(value.GetStart(), field+".from") && c.analyticsMoment(value.GetEnd(), field+".to")
 }

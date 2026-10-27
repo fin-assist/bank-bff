@@ -147,3 +147,11 @@ GET и известный идемпотентный DELETE объявляют �
 серий (`Block.lock.text`, `MetricLock.text`, `GetAnalyticsResponse.currency`, `Message.currency`,
 `AnswerSnapshot.currency`) создаются нулями при старте. Вложенные lock.text внутри data не меняются.
 Финансовые формулы, пороги, блокировки, пересчёт и самостоятельные fallback-снимки в BFF отсутствуют.
+
+Обязательные моменты period.range/state и границ gaps/periods проверяются до HTTP200: отсутствие или
+некорректный Timestamp даёт безопасный500 и ограниченную диагностику поля/absent/invalid. Отсутствующие
+params/period/state/bounds и пустой period_key также диагностируются по точному полю. Неизвестная coverage
+сохраняет fallback partial и увеличивает untranslated по соответствующему полю ответа.
+Empty-required считает полученные пустые currency/верхние lock.text и до отказа из-за другого поля, как
+требует grpc-api5.3. Серия MetricLock.text сохранена по контракту, но постоянно нулевая: устаревшая typed
+модель метрик не обслуживается BFF. Она не измеряет вложенные TileLock внутри Struct; их проверяет клиент.

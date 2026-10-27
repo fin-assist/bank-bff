@@ -42,3 +42,10 @@ verified service/user identity и allowlist metadata/read-primary, unary deadlin
 Unit покрывает преобразования/presence, malformed syntax/overflow, неизвестный обязательный enum и неполный
 ответ сервиса, все новые config/startup ветки. Реальные снимки/формулы/SQL analytics не подменяются этими
 фейками: они проверяются самим analytics, полная stage-цепочка — FIN-362.
+
+Ревью FIN-360: `AnalyticsMalformed` на обоих транспортных уровнях и соответствующие unit-кейсы проверяют
+отсутствующие/невалидные required Timestamp и диапазоны (включая gaps и ListPeriods), точные поля/codes
+диагностики и безопасный INTERNAL_ERROR. Unknown coverage имеет fallback partial и ограниченный счётчик.
+Полученные пустые currency/верхний lock.text считаются даже перед отказом другого поля; legacy MetricLock.text
+остаётся нулём, вложенный Struct не исследуется. Binary protobuf roundtrip с NaN/±Inf проходит gRPC и HTTP:
+Struct.AsMap преобразует их в строки NaN/Infinity/-Infinity, тело200 остаётся корректным JSON.

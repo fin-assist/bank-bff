@@ -103,7 +103,11 @@ func (d Deps) analyticsPeriods(c *rest.Call) {
 	conv := converter{loc: zone(resp.GetTimeZone()), metrics: c.Metrics}
 	items := make([]analyticsPeriodItem, 0, len(resp.GetPeriods()))
 	for _, p := range resp.GetPeriods() {
-		items = append(items, analyticsPeriodItem{Key: p.GetKey(), Range: timeRange(p.GetRange(), conv.loc), Coverage: coverageCode(p.GetCoverage())})
+		if !conv.analyticsRange(p.GetRange(), "ListPeriodsResponse.periods.range") {
+			rest.Internal().Write(c.W)
+			return
+		}
+		items = append(items, analyticsPeriodItem{Key: p.GetKey(), Range: timeRange(p.GetRange(), conv.loc), Coverage: conv.coverageCode(p.GetCoverage(), "ListPeriodsResponse.periods.coverage")})
 	}
 	rest.WriteJSON(c.W, http.StatusOK, struct {
 		Periods []analyticsPeriodItem `json:"periods"`
