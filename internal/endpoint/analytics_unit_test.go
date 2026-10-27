@@ -332,7 +332,7 @@ func TestUnitAnalyticsCalendarKeys(t *testing.T) {
 			}
 			r := u.serve(t, "GET", path, "", nil)
 			code := "invalid"
-			if key == "" {
+			if key == "" && (target == "params" || target == "periods") {
 				code = "absent"
 			}
 			if r.Code != 500 || r.code() != "INTERNAL_ERROR" || unitAnalyticsCounter(t, u, field, code) != 1 {
@@ -378,5 +378,35 @@ func TestUnitAnalyticsOptionalTimestamps(t *testing.T) {
 	u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return in, nil }
 	if r := u.serve(t, "GET", "/v1/analytics", "", nil); r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
+	}
+}
+
+func TestUnitAnalyticsLocalYearZeroIsValidRFC3339(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	in := analyticsFixture()
+	// The earliest valid UTC Timestamp becomes local year0000 at a fixed -05:00
+	// offset. RFC3339 permits four-digit 0000; avoid historical LMT offsets.
+	first := timestamppb.New(time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC))
+	if err := first.CheckValid(); err != nil {
+		t.Fatal(err)
+	}
+	in.TimeZone = "Etc/GMT+5"
+	in.State.CalculatedAt = first
+	in.State.LastOperationAt = first
+	in.Blocks = []*commonv1.Block{{Type: "future", V: 1, Lock: &commonv1.BlockLock{Text: "provided", AvailableFrom: first}, Action: &commonv1.BlockAction{Type: "future", Filter: &commonv1.OperationsFilter{From: first, To: first}}}}
+	u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return in, nil }
+	r := u.serve(t, "GET", "/v1/analytics", "", nil)
+	want := "0000-12-31T19:00:00-05:00"
+	if r.Code != 200 || r.json["state"].(map[string]any)["calculated_at"] != want || r.json["state"].(map[string]any)["last_operation_at"] != want {
+		t.Fatal(r.Code, r.Body.String())
+	}
+	block := r.json["blocks"].([]any)[0].(map[string]any)
+	if block["lock"].(map[string]any)["available_from"] != want || block["action"].(map[string]any)["filter"].(map[string]any)["from"] != want {
+		t.Fatal(block)
+	}
+	for _, field := range []string{"state.calculated_at", "state.last_operation_at", "blocks.lock.available_from", "blocks.action.filter.from"} {
+		if unitAnalyticsCounter(t, u, "GetAnalyticsResponse."+field, "invalid") != 0 {
+			t.Fatal("valid lower bound counted invalid", field)
+		}
 	}
 }

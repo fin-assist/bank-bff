@@ -463,7 +463,7 @@ func scenarioAnalyticsEnvelope(t *testing.T, start starter) {
 				}
 			})
 			code := "invalid"
-			if key == "" {
+			if key == "" && (target == "params" || target == "periods") {
 				code = "absent"
 			}
 			before := b.analyticsCounter(t, "finassist_untranslated_code_total", field, code)
@@ -521,5 +521,40 @@ func scenarioAnalyticsEnvelope(t *testing.T, start starter) {
 	r := b.do(t, request{method: "GET", path: "/v1/analytics", route: "/v1/analytics", header: auth})
 	if r.StatusCode != 200 || r.json["state"].(map[string]any)["last_operation_at"] != nil || r.json["period"].(map[string]any)["data_from"] != nil {
 		t.Fatal(r.StatusCode, string(r.body))
+	}
+}
+
+func scenarioAnalyticsLocalYearZero(t *testing.T, start starter) {
+	b := start(t, nil)
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	in := analyticsMessage(t)
+	first := timestamppb.New(time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC))
+	if err := first.CheckValid(); err != nil {
+		t.Fatal(err)
+	}
+	in.TimeZone = "Etc/GMT+5"
+	in.State.CalculatedAt = first
+	in.State.LastOperationAt = first
+	in.Blocks[4].Lock.AvailableFrom = first
+	in.Blocks[1].Action.Filter.From = first
+	in.Blocks[1].Action.Filter.To = first
+	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+		a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+			return in, nil
+		}
+	})
+	r := b.do(t, request{method: "GET", path: "/v1/analytics", route: "/v1/analytics", header: auth})
+	want := "0000-12-31T19:00:00-05:00"
+	if r.StatusCode != 200 || r.json["state"].(map[string]any)["calculated_at"] != want || r.json["state"].(map[string]any)["last_operation_at"] != want {
+		t.Fatal(r.StatusCode, string(r.body))
+	}
+	blocks := r.json["blocks"].([]any)
+	if blocks[4].(map[string]any)["lock"].(map[string]any)["available_from"] != want || blocks[1].(map[string]any)["action"].(map[string]any)["filter"].(map[string]any)["from"] != want {
+		t.Fatal(string(r.body))
+	}
+	for _, field := range []string{"state.calculated_at", "state.last_operation_at", "blocks.lock.available_from", "blocks.action.filter.from"} {
+		if b.analyticsCounter(t, "finassist_untranslated_code_total", "GetAnalyticsResponse."+field, "invalid") != 0 {
+			t.Fatal("valid lower bound counted invalid", field)
+		}
 	}
 }

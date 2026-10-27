@@ -177,7 +177,7 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 			value *string
 			field string
 		}{{n.Previous, "GetAnalyticsResponse.navigation.previous"}, {n.Next, "GetAnalyticsResponse.navigation.next"}} {
-			if key.value != nil && !c.analyticsPeriodKey(*key.value, key.field) {
+			if !c.analyticsNavigationKey(key.value, key.field) {
 				return analyticsResponse{}, false
 			}
 		}
@@ -210,7 +210,7 @@ func (c converter) analyticsMoment(value *timestamppb.Timestamp, field string) b
 	if c.loc != nil {
 		local = local.In(c.loc)
 	}
-	if local.Year() < 1 || local.Year() > 9999 {
+	if local.Year() < 0 || local.Year() > 9999 {
 		c.metrics.Untranslated(field, "invalid")
 		return false
 	}
@@ -235,6 +235,19 @@ func (c converter) analyticsPeriodKey(value, field string) bool {
 		return false
 	}
 	if !analyticsKeyShape.MatchString(value) {
+		c.metrics.Untranslated(field, "invalid")
+		return false
+	}
+	return true
+}
+
+// analyticsNavigationKey distinguishes absent optional navigation (nil) from
+// a present invalid calendar label, including the empty string.
+func (c converter) analyticsNavigationKey(value *string, field string) bool {
+	if value == nil {
+		return true
+	}
+	if !analyticsKeyShape.MatchString(*value) {
 		c.metrics.Untranslated(field, "invalid")
 		return false
 	}

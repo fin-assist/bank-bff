@@ -157,8 +157,22 @@ Empty-required считает полученные пустые currency/вер�
 модель метрик не обслуживается BFF. Она не измеряет вложенные TileLock внутри Struct; их проверяет клиент.
 
 Calendar keys params.period_key, periods.key и присутствующие navigation.previous/next проверяются по
-формату PeriodKey встроенного OpenAPI; пустой ключ даёт absent, неверный формат — invalid и безопасный500.
+формату PeriodKey встроенного OpenAPI; пустой обязательный ключ даёт absent, неверный формат — invalid и безопасный500.
+В navigation nil означает отсутствие; присутствующая пустая строка — invalid, как прочий неверный формат.
 Присутствующие optional Timestamp нового ответа также проходят CheckValid: bounds.data_from/data_to,
 state.last_operation_at, верхний lock.available_from и action.filter.from/to. Отсутствие остаётся отсутствием;
 невалидное значение —500 с точным proto-путём/invalid. Диагностика TimeRange использует proto-имена start/end,
 а не REST from/to. Вложенные Struct-поля остаются непрозрачными; другие converters не менялись.
+
+Граница деградации: правило клиента «не удалось разобрать блок — пропустить» применяется к чтению уже
+полученного REST-ответа и неизвестным примитивам/действиям. Оно не требует BFF отправлять невалидный
+RFC3339 date-time при преобразовании типизированного protobuf Timestamp. Если typed-момент верхнего lock
+или action.filter невозможно корректно перевести, BFF отвечает безопасным500 на весь запрос и считает
+диагностику; блоки самостоятельно не пересобирает и не отбрасывает. Это не полная валидация схемы всех
+свойств Block: v/payment_id/amount и opaque Struct по-прежнему переносятся по существующим правилам.
+Другие converters здесь не меняются; общий JSON-каталог блоков не означает новую общую реализацию.
+
+UTC Timestamp ограничен protobuf диапазоном0001–9999. После перевода в пояс ответа локальный год0000
+допустим по RFC3339 (`date-fullyear = 4DIGIT`); отрицательный или пятизначный год не допускается.
+[Формат RFC3339](https://www.rfc-editor.org/rfc/rfc3339#section-5.6),
+[диапазон Timestamp](https://protobuf.dev/reference/protobuf/google.protobuf/#timestamp).

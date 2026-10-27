@@ -53,3 +53,7 @@ Struct.AsMap преобразует их в строки NaN/Infinity/-Infinity,
 `AnalyticsEnvelope` и unit-регрессии проверяют формат каждого календарного ключа (params, periods,
 присутствующие navigation), каждый optional Timestamp при наличии и отсутствие optional без подстановки.
 Неполные ListPeriods закрепляют точные пары field/code и прирост счётчика на всех трёх уровнях.
+
+`AnalyticsLocalYearZero` и соответствующий unit-кейс сохраняют валидный UTC0001 в поясе Etc/GMT+5
+как RFC3339 год0000 с offset -05:00, включая required state и optional lock/filter; ответ валиден по OpenAPI
+и не увеличивает invalid. Присутствующая пустая optional-навигация имеет invalid; nil остаётся отсутствием.
