@@ -99,6 +99,13 @@ func newPublicAPI(cfg config.Config, log *slog.Logger, reg prometheus.Registerer
 		statementdatav1.StatementsService_GetImportConfig_FullMethodName[1:],
 		statementdatav1.StatementsService_ListUploads_FullMethodName[1:],
 		statementdatav1.StatementsService_ListUnreadLines_FullMethodName[1:],
+		statementdatav1.OperationsService_ListFeed_FullMethodName[1:],
+		statementdatav1.OperationsService_SearchOperations_FullMethodName[1:],
+		statementdatav1.OperationsService_GetOperation_FullMethodName[1:],
+		statementdatav1.OperationsService_ChangeCategory_FullMethodName[1:],
+		statementdatav1.CategoriesService_ListCategories_FullMethodName[1:],
+		statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName[1:],
+		statementdatav1.RegularPaymentsService_RestoreRegularPayment_FullMethodName[1:],
 	}); err != nil {
 		return nil, err
 	}
@@ -125,9 +132,12 @@ func newPublicAPI(cfg config.Config, log *slog.Logger, reg prometheus.Registerer
 	deps := endpoint.Deps{
 		Auth: userv1.NewAuthServiceClient(api.user), Consents: userv1.NewConsentDocumentServiceClient(api.user),
 		Profile: userv1.NewProfileServiceClient(api.user), Assistant: assistantv1.NewAssistantServiceClient(api.assistant),
-		Statements: statementdatav1.NewStatementsServiceClient(api.statements),
-		Analytics:  analyticsv1.NewAnalyticsServiceClient(api.analytics),
-		Heartbeat:  o.heartbeat, AnswerStream: o.answerStream, PhoneStream: o.phoneStream,
+		Statements:      statementdatav1.NewStatementsServiceClient(api.statements),
+		Operations:      statementdatav1.NewOperationsServiceClient(api.statements),
+		Categories:      statementdatav1.NewCategoriesServiceClient(api.statements),
+		RegularPayments: statementdatav1.NewRegularPaymentsServiceClient(api.statements),
+		Analytics:       analyticsv1.NewAnalyticsServiceClient(api.analytics),
+		Heartbeat:       o.heartbeat, AnswerStream: o.answerStream, PhoneStream: o.phoneStream,
 	}
 	api.handler, err = rest.Handler(rest.Config{
 		Spec: spec, Gates: rest.Gates{Maintenance: a.Maintenance, MinVersions: a.MinVersions, Clock: o.clock},

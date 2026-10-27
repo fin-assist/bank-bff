@@ -173,6 +173,7 @@ type unitAPI struct {
 	reg        *prometheus.Registry
 	f          *fakes
 	statements *statementFakes
+	operations *operationFakes
 }
 
 const (
@@ -196,7 +197,8 @@ func newUnitAPI(t *testing.T, streams rest.StreamLimits) *unitAPI {
 	}
 	f := &fakes{t: t}
 	sf := &statementFakes{}
-	deps := Deps{Auth: f, Consents: f, Profile: f, Assistant: f, Statements: sf, Analytics: f, Heartbeat: time.Millisecond, AnswerStream: time.Second, PhoneStream: time.Second}
+	of := &operationFakes{f: f}
+	deps := Deps{Auth: f, Consents: f, Profile: f, Assistant: f, Statements: sf, Analytics: f, Operations: of, Categories: of, RegularPayments: of, Heartbeat: time.Millisecond, AnswerStream: time.Second, PhoneStream: time.Second}
 	h, err := rest.Handler(rest.Config{Spec: spec, BodyLimit: rest.MinBodyLimit, Metrics: metrics, Log: slog.New(slog.DiscardHandler), Clock: time.Now,
 		Streams: rest.NewStreamLimiter(streams), Uploads: rest.NewStreamLimiter(rest.StreamLimits{Max: 16, PerIP: 2, RetryAfter: time.Second}), Gates: rest.Gates{MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}}, Clock: time.Now},
 		Authenticate: func(next http.Handler) http.Handler {
@@ -211,7 +213,7 @@ func newUnitAPI(t *testing.T, streams rest.StreamLimits) *unitAPI {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &unitAPI{h: h, metrics: metrics, reg: reg, f: f, statements: sf}
+	return &unitAPI{h: h, metrics: metrics, reg: reg, f: f, statements: sf, operations: of}
 }
 
 type result struct {

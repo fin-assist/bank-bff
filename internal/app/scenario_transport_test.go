@@ -26,6 +26,12 @@ func scenarioGates(t *testing.T, start starter) {
 	b := start(t, nil)
 	access := b.keys.Access("u1")
 	routes := []request{
+		{method: "GET", path: "/v1/operations", route: "/v1/operations"},
+		{method: "GET", path: "/v1/operations/" + idemKey + "?occurred_at=2026-01-01T00:00:00Z", route: "/v1/operations/{id}"},
+		{method: "PATCH", path: "/v1/operations/" + idemKey, route: "/v1/operations/{id}", body: `{"category_id":"cat","occurred_at":"2026-01-01T00:00:00Z"}`},
+		{method: "GET", path: "/v1/categories", route: "/v1/categories"},
+		{method: "PUT", path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal", route: "/v1/analytics/regular-payments/{id}/dismissal"},
+		{method: "DELETE", path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal", route: "/v1/analytics/regular-payments/{id}/dismissal"},
 		{method: "GET", path: "/v1/analytics", route: "/v1/analytics"},
 		{method: "GET", path: "/v1/analytics/periods", route: "/v1/analytics/periods"},
 		{method: "GET", path: "/v1/statements/config", route: "/v1/statements/config"},
@@ -72,7 +78,7 @@ func scenarioGates(t *testing.T, start starter) {
 		}
 	}
 	// Other paths: JSON 404 inside /v1, plain 404 outside, no operational endpoint.
-	for _, path := range []string{"/v1/unknown", "/v1/profile/extra", "/v1/operations"} {
+	for _, path := range []string{"/v1/unknown", "/v1/profile/extra", "/v1/operations/extra/unknown"} {
 		got := b.raw(t, request{method: "GET", path: path, header: base(nil)})
 		resp, body := got.Response, got.body
 		if resp.StatusCode != 404 || !strings.Contains(string(body), `"code":"NOT_FOUND"`) || resp.Header.Get("X-Request-Id") == "" {
@@ -97,6 +103,12 @@ func scenarioMaintenance(t *testing.T, start starter) {
 		c.API.Maintenance = rest.Maintenance{Enabled: true, Until: until, RetryAfter: time.Minute}
 	})
 	for _, r := range []request{
+		{method: "GET", path: "/v1/operations", route: "/v1/operations"},
+		{method: "GET", path: "/v1/operations/" + idemKey + "?occurred_at=2026-01-01T00:00:00Z", route: "/v1/operations/{id}"},
+		{method: "PATCH", path: "/v1/operations/" + idemKey, route: "/v1/operations/{id}", body: `{"category_id":"cat","occurred_at":"2026-01-01T00:00:00Z"}`},
+		{method: "GET", path: "/v1/categories", route: "/v1/categories"},
+		{method: "PUT", path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal", route: "/v1/analytics/regular-payments/{id}/dismissal"},
+		{method: "DELETE", path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal", route: "/v1/analytics/regular-payments/{id}/dismissal"},
 		{method: "GET", path: "/v1/analytics", route: "/v1/analytics"},
 		{method: "GET", path: "/v1/analytics/periods", route: "/v1/analytics/periods"},
 		{method: "GET", path: "/v1/statements/config", route: "/v1/statements/config"},

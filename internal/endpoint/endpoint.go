@@ -1,5 +1,5 @@
 // Package endpoint implements the REST/SSE operations of sign-in, profile,
-// assistant, statement imports and analytics (FIN-268/FIN-342/FIN-360) over the internal gRPC services. Handlers translate contract
+// assistant, statement imports, operations and analytics (FIN-268/FIN-342/FIN-359/FIN-360) over the internal gRPC services. Handlers translate contract
 // JSON to protobuf and back; business checks, quotas and idempotent effects stay in
 // the services (grpc-api.md 3, 6).
 package endpoint
@@ -69,11 +69,34 @@ type AnalyticsClient interface {
 	ListPeriods(context.Context, *analyticsv1.ListPeriodsRequest, ...grpc.CallOption) (*analyticsv1.ListPeriodsResponse, error)
 }
 
+// OperationsClient is the user-facing operations API of bank-statement-data.
+type OperationsClient interface {
+	ListFeed(context.Context, *statementdatav1.ListFeedRequest, ...grpc.CallOption) (*statementdatav1.ListFeedResponse, error)
+	SearchOperations(context.Context, *statementdatav1.SearchOperationsRequest, ...grpc.CallOption) (*statementdatav1.SearchOperationsResponse, error)
+	GetOperation(context.Context, *statementdatav1.GetOperationRequest, ...grpc.CallOption) (*statementdatav1.GetOperationResponse, error)
+	ChangeCategory(context.Context, *statementdatav1.ChangeCategoryRequest, ...grpc.CallOption) (*statementdatav1.ChangeCategoryResponse, error)
+}
+
+// CategoriesClient is the category directory of bank-statement-data.
+type CategoriesClient interface {
+	ListCategories(context.Context, *statementdatav1.ListCategoriesRequest, ...grpc.CallOption) (*statementdatav1.ListCategoriesResponse, error)
+}
+
+// RegularPaymentsClient owns durable dismissal assignments in bank-statement-data.
+type RegularPaymentsClient interface {
+	DismissRegularPayment(context.Context, *statementdatav1.DismissRegularPaymentRequest, ...grpc.CallOption) (*statementdatav1.DismissRegularPaymentResponse, error)
+	RestoreRegularPayment(context.Context, *statementdatav1.RestoreRegularPaymentRequest, ...grpc.CallOption) (*statementdatav1.RestoreRegularPaymentResponse, error)
+}
+
 // Deadlines of internal calls (grpc-api.md 9).
 const (
 	// UnaryDeadline bounds ordinary unary calls; it is well below the listener write
 	// timeout, so the error answer of an expired call is still written.
 	UnaryDeadline = 5 * time.Second
+	// SearchDeadline bounds the complete search result RPC.
+	SearchDeadline = 10 * time.Second
+	// SearchMessageLimit is the receive exception for SearchOperations only.
+	SearchMessageLimit = 16 << 20
 	// UploadDeadline bounds file transfer and synchronous service validation.
 	UploadDeadline = time.Minute
 	// ImportStreamDeadline bounds WatchUpload; parsing runs independently.
@@ -89,12 +112,15 @@ const (
 
 // Deps are the peers and settings of the handlers.
 type Deps struct {
-	Auth       AuthClient
-	Consents   ConsentClient
-	Profile    ProfileClient
-	Assistant  AssistantClient
-	Statements StatementsClient
-	Analytics  AnalyticsClient
+	Auth            AuthClient
+	Consents        ConsentClient
+	Profile         ProfileClient
+	Assistant       AssistantClient
+	Statements      StatementsClient
+	Analytics       AnalyticsClient
+	Operations      OperationsClient
+	Categories      CategoriesClient
+	RegularPayments RegularPaymentsClient
 	// Heartbeat is the SSE comment interval; zero means rest.Heartbeat.
 	Heartbeat time.Duration
 	// AnswerStream and PhoneStream override the stream deadlines; zero keeps the defaults.
@@ -115,9 +141,15 @@ func orDefault(v, def time.Duration) time.Duration {
 	return def
 }
 
-// Routes are the auth, profile, assistant, import and analytics contract operations.
+// Routes are all 30 public contract operations.
 func (d Deps) Routes() []rest.Route {
 	return []rest.Route{
+		{Method: http.MethodGet, Path: "/v1/operations", Protected: rest.Always, ReplaySafe: true, Handle: d.listOperations},
+		{Method: http.MethodGet, Path: "/v1/operations/{id}", Protected: rest.Always, ReplaySafe: true, Handle: d.getOperation},
+		{Method: http.MethodPatch, Path: "/v1/operations/{id}", Protected: rest.Always, ReplaySafe: true, Handle: d.changeCategory},
+		{Method: http.MethodGet, Path: "/v1/categories", Protected: rest.Always, ReplaySafe: true, Handle: d.listCategories},
+		{Method: http.MethodPut, Path: "/v1/analytics/regular-payments/{id}/dismissal", Protected: rest.Always, ReplaySafe: true, Handle: d.dismissRegularPayment},
+		{Method: http.MethodDelete, Path: "/v1/analytics/regular-payments/{id}/dismissal", Protected: rest.Always, ReplaySafe: true, Handle: d.restoreRegularPayment},
 		{Method: http.MethodGet, Path: "/v1/analytics", Protected: rest.Always, ReplaySafe: true, Handle: d.analytics},
 		{Method: http.MethodGet, Path: "/v1/analytics/periods", Protected: rest.Always, ReplaySafe: true, Handle: d.analyticsPeriods},
 		{Method: http.MethodGet, Path: "/v1/statements/config", Protected: rest.Always, ReplaySafe: true, Handle: d.importConfig},

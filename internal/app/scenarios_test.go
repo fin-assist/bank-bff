@@ -7,6 +7,7 @@ import "testing"
 // real HTTP and reach the peers over gRPC on bufconn; every non-SSE answer is
 // validated against openapi.yaml and every SSE event against its x-sse-events schema.
 var scenarios = map[string]func(*testing.T, starter){
+	"Operations": scenarioOperations, "OperationMutations": scenarioOperationMutations, "OperationsErrorsAndGates": scenarioOperationsErrorsAndGates, "OperationLargeSearch": scenarioOperationLargeSearch, "OperationMalformed": scenarioOperationMalformed,
 	"AnalyticsLocalYearZero": scenarioAnalyticsLocalYearZero, "AnalyticsEnvelope": scenarioAnalyticsEnvelope, "AnalyticsMalformed": scenarioAnalyticsMalformed, "Analytics": scenarioAnalytics, "AnalyticsPeriods": scenarioAnalyticsPeriods, "AnalyticsErrors": scenarioAnalyticsErrors,
 	"ImportLifetime": scenarioImportLifetime, "ImportMultipartEdges": scenarioImportMultipartEdges,
 	"ImportUnknownReason": scenarioImportUnknownReason,

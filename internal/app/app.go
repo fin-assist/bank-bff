@@ -98,7 +98,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Optio
 
 func server(handler http.Handler, log *slog.Logger, o options) *http.Server {
 	// The write timeout bounds unary answers; an SSE stream extends its own read and
-	// write deadlines (rest.StartStream), and unary peer calls end in 5 s, before it.
+	// write deadlines (rest.StartStream), and unary peer calls end in 5 s (search in 10 s), before it.
 	return &http.Server{Handler: handler, ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelError),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: o.readTimeout,
 		WriteTimeout: o.writeTimeout, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}

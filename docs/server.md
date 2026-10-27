@@ -10,10 +10,16 @@
 
 Operational listener публикует только `GET/HEAD /healthz`, `/readyz`, `/metrics`; публичный — только `/v1/...`. Pprof и `DefaultServeMux` не используются.
 
-## Публичные операции (FIN-268, FIN-342, FIN-361, FIN-360)
+## Публичные операции (FIN-268, FIN-342, FIN-361, FIN-360, FIN-359)
 
 | Операция | Метод сервиса | Токен | `Idempotency-Key` |
 |---|---|---|---|
+| `GET /v1/operations` | `statementdata.OperationsService/ListFeed` без фильтров, иначе `SearchOperations` | да | — |
+| `GET /v1/operations/{id}` | `statementdata.OperationsService/GetOperation` | да | — |
+| `PATCH /v1/operations/{id}` | `statementdata.OperationsService/ChangeCategory` | да | — |
+| `GET /v1/categories` | `statementdata.CategoriesService/ListCategories` | да | — |
+| `PUT /v1/analytics/regular-payments/{id}/dismissal` | `statementdata.RegularPaymentsService/DismissRegularPayment` | да | — |
+| `DELETE /v1/analytics/regular-payments/{id}/dismissal` | `statementdata.RegularPaymentsService/RestoreRegularPayment` | да | — |
 | `GET /v1/analytics` | `analytics.AnalyticsService/GetAnalytics` | да | — |
 | `GET /v1/analytics/periods` | `analytics.AnalyticsService/ListPeriods` | да | — |
 | `POST /v1/auth/phone` | `user.AuthService/StartPhoneVerification` | нет | да |
@@ -39,7 +45,7 @@ Operational listener публикует только `GET/HEAD /healthz`, `/read
 | `DELETE /v1/statements/{upload_id}` | `statementdata.StatementsService/DeleteUpload` | да | — |
 | `GET /v1/statements/unread-lines` | `statementdata.StatementsService/ListUnreadLines` | да | — |
 
-Остальные пути и методы `/v1` (операции, категории, «Не подписка») этой задачей не реализованы и отвечают JSON 404 `NOT_FOUND`; готовность всего продукта к prod они не подтверждают. Браузерный preflight `OPTIONS` (веб-клиент вне MVP) не обрабатывается.
+Все 30 операций встроенного OpenAPI доступны. Неизвестные пути и методы `/v1` отвечают JSON 404 `NOT_FOUND`; наличие HTTP-адаптеров не подтверждает сквозную готовность продукта к prod. Браузерный preflight `OPTIONS` (веб-клиент вне MVP) не обрабатывается.
 
 ## Порядок проверок запроса
 
@@ -52,7 +58,7 @@ Operational listener публикует только `GET/HEAD /healthz`, `/read
 5. `Authorization` у защищённых операций — `identity.HTTP` (подпись, `exp`, `iss`, `aud`, непустой `sub`) → 401 `INVALID_TOKEN`. Если свежих ключей нет (сбой `user`), токен не оценивается: 500 `INTERNAL_ERROR`, пользователь не выходит из аккаунта (FIN-293).
 6. JSON-тело: не больше `JSON_BODY_LIMIT` (по `Content-Length` и по фактическому чтению) → 413 `REQUEST_TOO_LARGE` ([FIN-339](https://finassist.youtrack.cloud/issue/FIN-339)); у операций без тела любое тело — 400, читается не больше одного байта.
 7. Схема `openapi.yaml` (kin-openapi): параметры пути и query, заголовки, `Content-Type`, тело; `Idempotency-Key` обязателен и должен быть UUID. В обработчик попадают только члены тела с точными именами схемы: `encoding/json` сопоставляет имена без учёта регистра, и `{"text":"ok","Text":""}` иначе заменил бы проверенный текст. Все нарушения — один 400 `VALIDATION_ERROR` с `details[]` (`REQUIRED`, `INVALID_FORMAT`, `OUT_OF_RANGE`). Длина строк считается в кодовых точках Unicode, как «символы» `docs/api.md` (kin-openapi считает единицы UTF-16). Неизвестный `transfer_mode` вопроса — 400.
-8. Вызов сервиса с дедлайном 5 с (UploadStatement — 60 с, WatchUpload — 4 мин) (меньше `WriteTimeout`, поэтому ответ об истечении успевает уйти).
+8. Вызов сервиса с дедлайном 5 с (SearchOperations — 10 с, UploadStatement — 60 с, WatchUpload — 4 мин) (меньше `WriteTimeout`, поэтому ответ об истечении успевает уйти).
 
 Идемпотентность, лимиты попыток, согласия и проверки токенов запроса выполняют сервисы; BFF ключ не хранит и запрос не повторяет.
 
@@ -66,7 +72,7 @@ Operational listener публикует только `GET/HEAD /healthz`, `/read
 
 `user_message`, `severity` и диагностический `message` задаёт единый каталог BFF (`internal/catalog`, FIN-225). Он фиксированный: в текст не подставляются ввод пользователя, сообщения сервисов, SQL, ответы провайдеров или модели. Неизвестный код получает общий безопасный текст. Для помощника: терминальное событие `error` и failed-сообщения истории получают `user_message`/`severity` и прежние `text`/`error_text` одним текстом каталога; `retryable` — разрешение `RetryAnswer` от сервиса (с presence у истории). Неизвестный legacy-код `AnswerErrorCode` — консервативный `INTERNAL_ERROR`.
 
-FIN-342: каждый REST-отказ нового BFF содержит `error.retryable`, включая явный `false`. `finerr.ToREST` сохраняет optional `RequestRetryInfo` сервиса; `true` выдаётся только при явном разрешении и отдельной декларации `Route.ReplaySafe` для всего внешнего вызова. Сейчас такая декларация есть у чтений GET, идемпотентных DELETE аккаунта, PUT/DELETE согласия помощника и DELETE загрузки. Она не переносится автоматически на новые маршруты и не означает безопасность только одного дочернего RPC. PATCH профиля получает `false`: docs/api.md 2.2 не объявляет безопасность повтора всего REST-вызова. Все POST пока получают `false`: BFF не хранит достоверный возраст/срок ключа, а UUID не доказывает окно 24 часа или 60 секунд refresh. Отсутствующий advice, неизвестный/некорректный статус и собственные отказы проверок BFF также дают `false`. Собственный временный отказ лимитера SSE — исключение с явным решением транспортного обработчика: `Call.Refuse(error, true)` соединяет его permission с той же доказанной безопасностью всего GET. Отказ происходит до RPC и не занимает слот; клиент может переоткрыть поток после свежего ожидания. Положительный `Retry-After` сам по себе ничего не разрешает. Корректирующие сценарии авторизации/согласия/техработ остаются отдельными правилами контракта.
+FIN-342: каждый REST-отказ нового BFF содержит `error.retryable`, включая явный `false`. `finerr.ToREST` сохраняет optional `RequestRetryInfo` сервиса; `true` выдаётся только при явном разрешении и отдельной декларации `Route.ReplaySafe` для всего внешнего вызова. Сейчас такая декларация есть у чтений GET, идемпотентных DELETE аккаунта, PUT/DELETE согласия помощника, DELETE загрузки, PATCH категории и PUT/DELETE «Не подписка». Она не переносится автоматически на новые маршруты и не означает безопасность только одного дочернего RPC. PATCH профиля получает `false`: docs/api.md 2.2 не объявляет безопасность повтора всего REST-вызова. Все POST пока получают `false`: BFF не хранит достоверный возраст/срок ключа, а UUID не доказывает окно 24 часа или 60 секунд refresh. Отсутствующий advice, неизвестный/некорректный статус и собственные отказы проверок BFF также дают `false`. Собственный временный отказ лимитера SSE — исключение с явным решением транспортного обработчика: `Call.Refuse(error, true)` соединяет его permission с той же доказанной безопасностью всего GET. Отказ происходит до RPC и не занимает слот; клиент может переоткрыть поток после свежего ожидания. Положительный `Retry-After` сам по себе ничего не разрешает. Корректирующие сценарии авторизации/согласия/техработ остаются отдельными правилами контракта.
 
 `AnswerError.status` терминального события и `Message.error` failed-истории разбираются общим `finerr.DecodeResultStatus`. При отсутствии Status применяется прежний адаптер. Присутствующая корректная причина открыта и имеет приоритет над legacy enum; неизвестная каталогу причина сохраняется с общим безопасным текстом помощника. Присутствующий некорректный Status даёт `INTERNAL_ERROR`, а legacy enum не читается. `RequestRetryInfo` и относительный `RetryInfo` во вложенном результате запрещены самим декодером. Ни raw `Status.message`, ни metadata не становятся пользовательским текстом. Совпадение причины с REST `MAINTENANCE`/`CONSENT_REQUIRED` не превращает успешное чтение в HTTP-отказ и не создаёт REST-восстановление.
 
@@ -176,3 +182,24 @@ UTC Timestamp ограничен protobuf диапазоном0001–9999. По�
 допустим по RFC3339 (`date-fullyear = 4DIGIT`); отрицательный или пятизначный год не допускается.
 [Формат RFC3339](https://www.rfc-editor.org/rfc/rfc3339#section-5.6),
 [диапазон Timestamp](https://protobuf.dev/reference/protobuf/google.protobuf/#timestamp).
+
+## Операции, категории и «Не подписка» (FIN-359)
+
+Все семь RPC используют существующее соединение `STATEMENTS_GRPC_ADDR`, проверенный access-токен и
+allowlist metadata. Наличие любого фильтра (`from`, `to`, `all_time`, `q`, `category_id`, `kind`,
+`amount_from`, `amount_to`, `transfer_mode`, `selection`) выбирает поиск; `before` с фильтрами и
+`all_time` с границами периода отклоняются 400 до RPC. Неизвестные kind/transfer_mode отклоняются 400,
+selection передаётся непрозрачно, selection_name не используется. Семантику времени before, диапазонов,
+поиска и selection проверяет сервис. SearchOperations ограничен10 с/16 МиБ ответа только для этого вызова;
+остальные новые RPC — 5 с/4 МиБ. Идемпотентные присваивания ChangeCategory/Dismiss/Restore включены в
+retry-list клиента; REST retryable всё равно требует отдельного explicit RequestRetryInfo сервиса.
+
+Время возвращается в time_zone сервиса через RFC3339Nano без потери долей секунды. Лента/поиск не
+отдают description/posted_at/note_details/bank_category/mcc/source_name и spoken; детали и результат
+правки отдают их по наличию. Счета пары, отрицательные итоговые суммы после возвратов, валюты и тексты
+переносятся без финансовых вычислений. Неизвестный обязательный enum операции, отсутствующий/невалидный
+момент, отрицательная сумма операции или неполная оболочка ленты дают безопасный 500 и ограниченный
+счётчик finassist_untranslated_code_total (field/code из констант); пустая валюта операции также 500,
+временный RUB fallback FIN-98 относится только к оговорённым ответам analytics/assistant. Неизвестные
+направления категории пропускаются со счётчиком; остальные поля категорий, включая icon, сохраняются.
+PUT/DELETE отметки принимают только каноничный lowercase UUID и отвечают 204 без тела.
