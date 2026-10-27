@@ -166,9 +166,18 @@ func scenarioProfileDeletion(t *testing.T, start starter) {
 		{method: "GET", path: "/v1/profile", route: "/v1/profile", header: auth},
 		{method: "PATCH", path: "/v1/profile", route: "/v1/profile", header: auth, body: `{}`},
 	} {
+		method := userv1.ProfileService_GetProfile_FullMethodName
+		if req.method == "PATCH" {
+			method = userv1.ProfileService_UpdateProfile_FullMethodName
+		}
+		before := len(b.peers.Calls(method))
 		if r := b.do(t, req); r.StatusCode != 401 || errorCode(r) != "TOKEN_REVOKED" {
 			t.Fatal(r.StatusCode, string(r.body))
 		}
+		if count := len(b.peers.Calls(method)); count != before+1 {
+			t.Fatalf("revocation must come from user: %s calls=%d, before=%d", method, count, before)
+		}
+		lastCall(t, b, method, access, "")
 	}
 	if r := b.do(t, request{method: "GET", path: "/v1/profile", route: "/v1/profile", header: base(map[string]string{"Authorization": "Bearer " + other})}); r.StatusCode != 200 || r.json["user_id"] != "u2" {
 		t.Fatal(r.StatusCode, string(r.body))
