@@ -1,5 +1,5 @@
 // Package endpoint implements the REST/SSE operations of sign-in, profile,
-// assistant and statement imports (FIN-268/FIN-342) over the internal gRPC services. Handlers translate contract
+// assistant, statement imports and analytics (FIN-268/FIN-342/FIN-360) over the internal gRPC services. Handlers translate contract
 // JSON to protobuf and back; business checks, quotas and idempotent effects stay in
 // the services (grpc-api.md 3, 6).
 package endpoint
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
 	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
@@ -62,6 +63,12 @@ type StatementsClient interface {
 	ListUnreadLines(context.Context, *statementdatav1.ListUnreadLinesRequest, ...grpc.CallOption) (*statementdatav1.ListUnreadLinesResponse, error)
 }
 
+// AnalyticsClient is the read API of analytics.AnalyticsService.
+type AnalyticsClient interface {
+	GetAnalytics(context.Context, *analyticsv1.GetAnalyticsRequest, ...grpc.CallOption) (*analyticsv1.GetAnalyticsResponse, error)
+	ListPeriods(context.Context, *analyticsv1.ListPeriodsRequest, ...grpc.CallOption) (*analyticsv1.ListPeriodsResponse, error)
+}
+
 // Deadlines of internal calls (grpc-api.md 9).
 const (
 	// UnaryDeadline bounds ordinary unary calls; it is well below the listener write
@@ -87,6 +94,7 @@ type Deps struct {
 	Profile    ProfileClient
 	Assistant  AssistantClient
 	Statements StatementsClient
+	Analytics  AnalyticsClient
 	// Heartbeat is the SSE comment interval; zero means rest.Heartbeat.
 	Heartbeat time.Duration
 	// AnswerStream and PhoneStream override the stream deadlines; zero keeps the defaults.
@@ -107,9 +115,11 @@ func orDefault(v, def time.Duration) time.Duration {
 	return def
 }
 
-// Routes are the auth, profile, assistant and import contract operations.
+// Routes are the auth, profile, assistant, import and analytics contract operations.
 func (d Deps) Routes() []rest.Route {
 	return []rest.Route{
+		{Method: http.MethodGet, Path: "/v1/analytics", Protected: rest.Always, ReplaySafe: true, Handle: d.analytics},
+		{Method: http.MethodGet, Path: "/v1/analytics/periods", Protected: rest.Always, ReplaySafe: true, Handle: d.analyticsPeriods},
 		{Method: http.MethodGet, Path: "/v1/statements/config", Protected: rest.Always, ReplaySafe: true, Handle: d.importConfig},
 		{Method: http.MethodPost, Path: "/v1/statements", Protected: rest.Always, Idempotent: true, Input: rest.StreamingInput, Handle: d.uploadStatement},
 		{Method: http.MethodGet, Path: "/v1/statements/{upload_id}/progress", Protected: rest.Always, ReplaySafe: true, Handle: d.watchUpload},

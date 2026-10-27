@@ -8,7 +8,7 @@ import (
 
 // Fields of finassist_empty_required_field_total that this BFF serves
 // (grpc-api.md 5.3); each gets a zero series at startup.
-var emptyRequiredFields = []string{"Message.currency", "AnswerSnapshot.currency"}
+var emptyRequiredFields = []string{"Block.lock.text", "MetricLock.text", "GetAnalyticsResponse.currency", "Message.currency", "AnswerSnapshot.currency"}
 
 // Metrics are the BFF metrics of the public API. Labels are bounded: routes are
 // patterns, codes are registry names or "other", client versions are capped.

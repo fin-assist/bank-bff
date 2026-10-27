@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
 	"github.com/prometheus/client_golang/prometheus"
@@ -60,25 +61,27 @@ func (s *fakeStream[T]) RecvMsg(any) error            { return nil }
 
 // fakes implements every client interface; a nil function fails the test.
 type fakes struct {
-	t           *testing.T
-	start       func(*userv1.StartPhoneVerificationRequest) (*userv1.StartPhoneVerificationResponse, error)
-	watchPhone  func(context.Context, *userv1.WatchPhoneVerificationRequest) (grpc.ServerStreamingClient[userv1.WatchPhoneVerificationResponse], error)
-	register    func(*userv1.RegisterRequest) (*userv1.RegisterResponse, error)
-	refresh     func(*userv1.RefreshTokensRequest) (*userv1.RefreshTokensResponse, error)
-	logout      func(*userv1.LogoutRequest) (*userv1.LogoutResponse, error)
-	document    func(*userv1.GetConsentDocumentRequest) (*userv1.GetConsentDocumentResponse, error)
-	profile     func() (*userv1.GetProfileResponse, error)
-	update      func(*userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error)
-	delete      func() (*userv1.DeleteAccountResponse, error)
-	grant       func(*userv1.GrantAssistantConsentRequest) (*userv1.GrantAssistantConsentResponse, error)
-	revoke      func() (*userv1.RevokeAssistantConsentResponse, error)
-	ask         func(*assistantv1.AskQuestionRequest) (*assistantv1.AskQuestionResponse, error)
-	watchAnswer func(context.Context, *assistantv1.WatchAnswerRequest) (grpc.ServerStreamingClient[assistantv1.WatchAnswerResponse], error)
-	list        func(*assistantv1.ListMessagesRequest) (*assistantv1.ListMessagesResponse, error)
-	retry       func(*assistantv1.RetryAnswerRequest) (*assistantv1.RetryAnswerResponse, error)
-	limit       func() (*assistantv1.GetLimitResponse, error)
-	deadlines   []time.Duration
-	mu          sync.Mutex
+	t             *testing.T
+	start         func(*userv1.StartPhoneVerificationRequest) (*userv1.StartPhoneVerificationResponse, error)
+	watchPhone    func(context.Context, *userv1.WatchPhoneVerificationRequest) (grpc.ServerStreamingClient[userv1.WatchPhoneVerificationResponse], error)
+	register      func(*userv1.RegisterRequest) (*userv1.RegisterResponse, error)
+	refresh       func(*userv1.RefreshTokensRequest) (*userv1.RefreshTokensResponse, error)
+	logout        func(*userv1.LogoutRequest) (*userv1.LogoutResponse, error)
+	document      func(*userv1.GetConsentDocumentRequest) (*userv1.GetConsentDocumentResponse, error)
+	profile       func() (*userv1.GetProfileResponse, error)
+	update        func(*userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error)
+	delete        func() (*userv1.DeleteAccountResponse, error)
+	grant         func(*userv1.GrantAssistantConsentRequest) (*userv1.GrantAssistantConsentResponse, error)
+	revoke        func() (*userv1.RevokeAssistantConsentResponse, error)
+	ask           func(*assistantv1.AskQuestionRequest) (*assistantv1.AskQuestionResponse, error)
+	watchAnswer   func(context.Context, *assistantv1.WatchAnswerRequest) (grpc.ServerStreamingClient[assistantv1.WatchAnswerResponse], error)
+	list          func(*assistantv1.ListMessagesRequest) (*assistantv1.ListMessagesResponse, error)
+	retry         func(*assistantv1.RetryAnswerRequest) (*assistantv1.RetryAnswerResponse, error)
+	limit         func() (*assistantv1.GetLimitResponse, error)
+	analyticsGet  func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error)
+	analyticsList func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error)
+	deadlines     []time.Duration
+	mu            sync.Mutex
 }
 
 func must[F any](t *testing.T, f F, name string) F {
@@ -193,7 +196,7 @@ func newUnitAPI(t *testing.T, streams rest.StreamLimits) *unitAPI {
 	}
 	f := &fakes{t: t}
 	sf := &statementFakes{}
-	deps := Deps{Auth: f, Consents: f, Profile: f, Assistant: f, Statements: sf, Heartbeat: time.Millisecond, AnswerStream: time.Second, PhoneStream: time.Second}
+	deps := Deps{Auth: f, Consents: f, Profile: f, Assistant: f, Statements: sf, Analytics: f, Heartbeat: time.Millisecond, AnswerStream: time.Second, PhoneStream: time.Second}
 	h, err := rest.Handler(rest.Config{Spec: spec, BodyLimit: rest.MinBodyLimit, Metrics: metrics, Log: slog.New(slog.DiscardHandler), Clock: time.Now,
 		Streams: rest.NewStreamLimiter(streams), Uploads: rest.NewStreamLimiter(rest.StreamLimits{Max: 16, PerIP: 2, RetryAfter: time.Second}), Gates: rest.Gates{MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}}, Clock: time.Now},
 		Authenticate: func(next http.Handler) http.Handler {
@@ -276,4 +279,13 @@ func (r result) events(t *testing.T) (events []event, pings int) {
 		}
 	}
 	return events, pings
+}
+
+func (f *fakes) GetAnalytics(ctx context.Context, in *analyticsv1.GetAnalyticsRequest, _ ...grpc.CallOption) (*analyticsv1.GetAnalyticsResponse, error) {
+	f.deadline(ctx)
+	return must(f.t, f.analyticsGet, "analyticsGet")(in)
+}
+func (f *fakes) ListPeriods(ctx context.Context, in *analyticsv1.ListPeriodsRequest, _ ...grpc.CallOption) (*analyticsv1.ListPeriodsResponse, error) {
+	f.deadline(ctx)
+	return must(f.t, f.analyticsList, "analyticsList")(in)
 }

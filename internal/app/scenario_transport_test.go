@@ -26,6 +26,8 @@ func scenarioGates(t *testing.T, start starter) {
 	b := start(t, nil)
 	access := b.keys.Access("u1")
 	routes := []request{
+		{method: "GET", path: "/v1/analytics", route: "/v1/analytics"},
+		{method: "GET", path: "/v1/analytics/periods", route: "/v1/analytics/periods"},
 		{method: "GET", path: "/v1/statements/config", route: "/v1/statements/config"},
 		{method: "POST", path: "/v1/statements", route: "/v1/statements"},
 		{method: "GET", path: "/v1/statements", route: "/v1/statements"},
@@ -95,6 +97,8 @@ func scenarioMaintenance(t *testing.T, start starter) {
 		c.API.Maintenance = rest.Maintenance{Enabled: true, Until: until, RetryAfter: time.Minute}
 	})
 	for _, r := range []request{
+		{method: "GET", path: "/v1/analytics", route: "/v1/analytics"},
+		{method: "GET", path: "/v1/analytics/periods", route: "/v1/analytics/periods"},
 		{method: "GET", path: "/v1/statements/config", route: "/v1/statements/config"},
 		{method: "POST", path: "/v1/statements", route: "/v1/statements"},
 		{method: "GET", path: "/v1/statements", route: "/v1/statements"},

@@ -4,16 +4,18 @@
 
 ## Жизненный цикл
 
-`cmd/bank-bff` читает конфигурацию, создаёт slog с именем сервиса и версией и передаёт контекст SIGINT/SIGTERM в `internal/app.Run`. В `stage`/`prod` сначала собирается публичный API (`internal/app/api.go`): контракт, идентичность `go-identity` v0.2.0 `NewAssembly`, ленивые gRPC-соединения `go-grpc` v0.2.0 `client.Dial` к `user`, `assistant` и `bank-statement-data`, метрики и маршруты. Сборка ничего не загружает по сети и не запускает горутин; при ошибке всё уже созданное освобождается, а старт завершается exit 1 до привязки портов. Затем привязываются публичный и operational TCP listeners; ошибка второго bind освобождает первый. После обоих bind включается readiness и запускается обновление ключей идентичности (`Assembly.Run`: JWKS пользователя из `user.GetSigningKeys`, в `prod` — ключи API-сервера). Это единственный фоновый цикл BFF; он принадлежит библиотеке идентичности и останавливается вместе с listeners. Бизнес-заданий нет.
+`cmd/bank-bff` читает конфигурацию, создаёт slog с именем сервиса и версией и передаёт контекст SIGINT/SIGTERM в `internal/app.Run`. В `stage`/`prod` сначала собирается публичный API (`internal/app/api.go`): контракт, идентичность `go-identity` v0.2.0 `NewAssembly`, ленивые gRPC-соединения `go-grpc` v0.2.0 `client.Dial` к `user`, `assistant`, `bank-statement-data` и `analytics`, метрики и маршруты. Сборка ничего не загружает по сети и не запускает горутин; при ошибке всё уже созданное освобождается, а старт завершается exit 1 до привязки портов. Затем привязываются публичный и operational TCP listeners; ошибка второго bind освобождает первый. После обоих bind включается readiness и запускается обновление ключей идентичности (`Assembly.Run`: JWKS пользователя из `user.GetSigningKeys`, в `prod` — ключи API-сервера). Это единственный фоновый цикл BFF; он принадлежит библиотеке идентичности и останавливается вместе с listeners. Бизнес-заданий нет.
 
 После SIGTERM readiness становится 503, публичный listener обслуживает запросы `SHUTDOWN_DELAY`, затем оба HTTP-сервера получают общий ограниченный контекст shutdown. Открытые SSE-потоки при этом сразу завершаются без терминального события (клиент переподключается и первым получает текущее состояние), поэтому shutdown не ждёт их до своего срока; по истечении срока оставшиеся соединения закрываются. Потом останавливается обновление ключей и закрываются gRPC-соединения. В `dev` публичный mux пустой (любой путь — 404): `NewAssembly` не поддерживает `dev`, и обхода авторизации нет.
 
 Operational listener публикует только `GET/HEAD /healthz`, `/readyz`, `/metrics`; публичный — только `/v1/...`. Pprof и `DefaultServeMux` не используются.
 
-## Публичные операции (FIN-268, FIN-342, FIN-361)
+## Публичные операции (FIN-268, FIN-342, FIN-361, FIN-360)
 
 | Операция | Метод сервиса | Токен | `Idempotency-Key` |
 |---|---|---|---|
+| `GET /v1/analytics` | `analytics.AnalyticsService/GetAnalytics` | да | — |
+| `GET /v1/analytics/periods` | `analytics.AnalyticsService/ListPeriods` | да | — |
 | `POST /v1/auth/phone` | `user.AuthService/StartPhoneVerification` | нет | да |
 | `GET /v1/auth/phone/events` (SSE) | `user.AuthService/WatchPhoneVerification` | `X-Verification-Token` → поле запроса | — |
 | `POST /v1/auth/register` | `user.AuthService/Register` | нет | да |
@@ -37,7 +39,7 @@ Operational listener публикует только `GET/HEAD /healthz`, `/read
 | `DELETE /v1/statements/{upload_id}` | `statementdata.StatementsService/DeleteUpload` | да | — |
 | `GET /v1/statements/unread-lines` | `statementdata.StatementsService/ListUnreadLines` | да | — |
 
-Остальные пути и методы `/v1` (операции, категории, аналитика) этой задачей не реализованы и отвечают JSON 404 `NOT_FOUND`; готовность всего продукта к prod они не подтверждают. Браузерный preflight `OPTIONS` (веб-клиент вне MVP) не обрабатывается.
+Остальные пути и методы `/v1` (операции, категории, «Не подписка») этой задачей не реализованы и отвечают JSON 404 `NOT_FOUND`; готовность всего продукта к prod они не подтверждают. Браузерный preflight `OPTIONS` (веб-клиент вне MVP) не обрабатывается.
 
 ## Порядок проверок запроса
 
@@ -88,7 +90,7 @@ ReadHeaderTimeout 5s, ReadTimeout 10s, WriteTimeout 30s, IdleTimeout 60s, MaxHea
 | `finassist_http_request_duration_seconds` | `route` |
 | `finassist_unmapped_error_total` | `reason` (форма реестра, не больше 32, затем `other`; `none`, `invalid`), `grpc_code` |
 | `finassist_untranslated_code_total` | `field`, `code` (`unknown`, `content`) |
-| `finassist_empty_required_field_total` | `field`: `Message.currency`, `AnswerSnapshot.currency` (ряды с 0 при старте) |
+| `finassist_empty_required_field_total` | `field`: `Block.lock.text`, `MetricLock.text`, `GetAnalyticsResponse.currency`, `Message.currency`, `AnswerSnapshot.currency` (ряды с 0 при старте) |
 | `finassist_sse_streams` | `route` |
 | `finassist_sse_rejected_total` | `route`: SSE и POST /v1/statements, отклонённые локальным бюджетом |
 | `grpc_client_handled_total`, `grpc_client_handling_seconds` | `peer`, `method`, `code` (go-grpc) |
@@ -122,3 +124,26 @@ GET и известный идемпотентный DELETE объявляют �
 `DELETE /v1/profile` вызывает `DeleteAccount` без тела и отвечает `204` без JSON. BFF проверяет подпись действующего access-токена и не кеширует удаление: повтор до истечения токена снова доходит до идемпотентного RPC и получает `204`. Последующие операции профиля получают `TOKEN_REVOKED` от `user`; новый запрет токенов на стороне BFF не вводится. Отзыв refresh-токенов и доставка удаления всем соседям выполняются в `user`.
 
 Оба маршрута используют verified identity, разрешённые metadata, unary-дедлайн 5 секунд и общую безопасную трансляцию `finerr`. У них нет `Idempotency-Key` и автоматического gRPC-повтора; DELETE объявлен безопасным для повтора полного REST-вызова, но `error.retryable=true` по-прежнему требует явного разрешения сервиса. PATCH сохраняет `retryable=false` даже при положительном advice: контракт 2.2 не обещает безопасность полного повтора. Текущий `user.Update` не создаёт повторное событие для той же настройки, но BFF не расширяет гарантию REST на основании одной реализации.
+
+## Аналитика (FIN-360)
+
+Оба GET передают проверенный токен пользователя и `X-Read-Primary` общей цепочкой metadata.
+`period` по умолчанию month, `transfer_mode` — with; неизвестный код запроса отклоняется400,
+поскольку enum текущего protobuf его не представляет. `date` передаётся как `period_key` без календарного
+преобразования; выбор фактического периода остаётся в analytics. `supports=type@v` разбирается в список
+с положительным int32 v, `exp=key:variant` — в map; неизвестные типы/эксперименты передаются сервису.
+Неверная форма этих пар отклоняется400 до RPC. Каждый вызов ограничен5с, оба RPC входят в read-retry allowlist.
+
+Ответ переносит `blocks` в исходном порядке, включая неизвестные примитивы, версии и строковые коды.
+`data` — открытый JSON-объект без разбора вложенных сумм, basis, lock, filters и действий. Типизированные
+моменты period/state/верхнего lock/action.filter форматируются в time_zone ответа с сохранением наносекунд;
+календарные ключи и уже сформированные строки Struct не меняются. Период включает gaps и coverage,
+соседние ключи — явный null при отсутствии, пустые списки — `[]`. Старые поля tiles/insights не читаются.
+`has_data=false` даёт только этот флаг и не считает currency дефектом. Неизвестная coverage — partial;
+непредставимый обязательный params.period — безопасный500 и ограниченная untranslated-метрика.
+
+Пустая currency при наличии данных временно заменяется на RUB (FIN-98); пустой верхний Block.lock.text —
+на «Пока недоступно». Каждый случай увеличивает `finassist_empty_required_field_total`; все пять контрактных
+серий (`Block.lock.text`, `MetricLock.text`, `GetAnalyticsResponse.currency`, `Message.currency`,
+`AnswerSnapshot.currency`) создаются нулями при старте. Вложенные lock.text внутри data не меняются.
+Финансовые формулы, пороги, блокировки, пересчёт и самостоятельные fallback-снимки в BFF отсутствуют.

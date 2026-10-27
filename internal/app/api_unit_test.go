@@ -82,8 +82,10 @@ func TestUnitPublicAPIAssemblyFailuresReleaseEverything(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
-		"bad user target":      func(c *config.Config, _ *prometheus.Registry) { c.API.UserAddr = "%zz" },
-		"bad assistant target": func(c *config.Config, _ *prometheus.Registry) { c.API.AssistantAddr = "%zz" },
+		"bad user target":       func(c *config.Config, _ *prometheus.Registry) { c.API.UserAddr = "%zz" },
+		"bad analytics target":  func(c *config.Config, _ *prometheus.Registry) { c.API.AnalyticsAddr = "%zz" },
+		"bad statements target": func(c *config.Config, _ *prometheus.Registry) { c.API.StatementsAddr = "%zz" },
+		"bad assistant target":  func(c *config.Config, _ *prometheus.Registry) { c.API.AssistantAddr = "%zz" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := apiConfig(stage)

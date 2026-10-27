@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
 	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
@@ -40,6 +41,7 @@ type publicAPI struct {
 	user       *grpc.ClientConn
 	assistant  *grpc.ClientConn
 	statements *grpc.ClientConn
+	analytics  *grpc.ClientConn
 	// streams is ended on shutdown, so draining does not wait for SSE until timeout.
 	streams *rest.StreamLimiter
 	uploads *rest.StreamLimiter
@@ -100,6 +102,12 @@ func newPublicAPI(cfg config.Config, log *slog.Logger, reg prometheus.Registerer
 	}); err != nil {
 		return nil, err
 	}
+	if api.analytics, err = dial(a.AnalyticsAddr, "analytics", []string{
+		analyticsv1.AnalyticsService_GetAnalytics_FullMethodName[1:],
+		analyticsv1.AnalyticsService_ListPeriods_FullMethodName[1:],
+	}); err != nil {
+		return nil, err
+	}
 	metrics, err := rest.NewMetrics(reg)
 	if err != nil {
 		return nil, err
@@ -118,6 +126,7 @@ func newPublicAPI(cfg config.Config, log *slog.Logger, reg prometheus.Registerer
 		Auth: userv1.NewAuthServiceClient(api.user), Consents: userv1.NewConsentDocumentServiceClient(api.user),
 		Profile: userv1.NewProfileServiceClient(api.user), Assistant: assistantv1.NewAssistantServiceClient(api.assistant),
 		Statements: statementdatav1.NewStatementsServiceClient(api.statements),
+		Analytics:  analyticsv1.NewAnalyticsServiceClient(api.analytics),
 		Heartbeat:  o.heartbeat, AnswerStream: o.answerStream, PhoneStream: o.phoneStream,
 	}
 	api.handler, err = rest.Handler(rest.Config{
@@ -137,7 +146,7 @@ func (a *publicAPI) refreshKeys(ctx context.Context) { _ = a.identity.Run(ctx) }
 
 func (a *publicAPI) close(log *slog.Logger) {
 	var err error
-	for _, conn := range []*grpc.ClientConn{a.user, a.assistant, a.statements} {
+	for _, conn := range []*grpc.ClientConn{a.user, a.assistant, a.statements, a.analytics} {
 		if conn != nil {
 			err = errors.Join(err, conn.Close())
 		}
