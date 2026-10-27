@@ -15,7 +15,7 @@ import (
 )
 
 // Source records the fin-assist/contracts commit the embedded copy was taken from.
-const Source = "fin-assist/contracts 8b3b1b639220941462bbabc28208cb1eb00ef0fc openapi/openapi.yaml"
+const Source = "fin-assist/contracts 1c624f506ad3517a6f8b665dfe2bf835e43b078b openapi/openapi.yaml"
 
 //go:embed openapi.yaml
 var document []byte
@@ -27,9 +27,8 @@ func Document() []byte { return append([]byte(nil), document...) }
 type Spec struct{ doc *openapi3.T }
 
 // Load parses and validates the embedded contract once per process; the parsed
-// document is immutable and shared. Embedded examples are not validated: two
-// examples of the source commit are incomplete (FIN-339), which does not affect
-// schema validation of requests and responses.
+// document is immutable and shared. The full document, including defaults and
+// embedded examples, is validated before any operation is served.
 func Load(context.Context) (*Spec, error) { return loadOnce() }
 
 var loadOnce = sync.OnceValues(func() (*Spec, error) { return parse(context.Background(), document) })
@@ -40,7 +39,7 @@ func parse(ctx context.Context, data []byte) (*Spec, error) {
 	if err != nil {
 		return nil, fmt.Errorf("openapi: parse: %w", err)
 	}
-	if err := doc.Validate(ctx, openapi3.DisableExamplesValidation()); err != nil {
+	if err := doc.Validate(ctx); err != nil {
 		return nil, fmt.Errorf("openapi: validate: %w", err)
 	}
 	return &Spec{doc: doc}, nil

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -36,6 +37,22 @@ func TestUnitInvalidContractIsRefused(t *testing.T) {
 	for _, data := range []string{"{not yaml", "openapi: 3.0.3\ninfo: {}\npaths: {}\n"} {
 		if _, err := parse(context.Background(), []byte(data)); err == nil {
 			t.Fatalf("%q accepted", data)
+		}
+	}
+}
+
+func TestUnitContractValidatesExamplesAndDefaults(t *testing.T) {
+	for _, field := range []string{"example", "default"} {
+		for _, valid := range []bool{false, true} {
+			value := "42"
+			if valid {
+				value = "hello"
+			}
+			raw := fmt.Sprintf("openapi: 3.0.3\ninfo: {title: probe, version: 1.0.0}\npaths: {}\ncomponents:\n  schemas:\n    Probe:\n      type: string\n      %s: %s\n", field, value)
+			_, err := parse(context.Background(), []byte(raw))
+			if (err == nil) != valid {
+				t.Fatalf("%s valid%v: %v", field, valid, err)
+			}
 		}
 	}
 }

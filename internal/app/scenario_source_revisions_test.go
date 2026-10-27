@@ -27,7 +27,9 @@ func scenarioAssistantSourceRevisions(t *testing.T, start starter) {
 		{"unverified", []assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED}, []any{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
 		{"timezone", []assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_TIME_ZONE}, []any{"time_zone"}, "Обновились настройки часового пояса"},
 		{"mixed", []assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UPLOADS, assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED, assistantv1.ChangedSince_CHANGED_SINCE_TIME_ZONE}, []any{"uploads", "unverified", "time_zone"}, "с тех пор загружались выписки. Актуальность данных этого ответа не подтверждена. Обновились настройки часового пояса"},
-		{"unknown", []assistantv1.ChangedSince{99}, []any{}, "с тех пор данные менялись"},
+		{"unknown", []assistantv1.ChangedSince{99}, []any{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
+		{"mixed-unknown", []assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_CATEGORIES, 99}, []any{"categories", "unverified"}, "с тех пор категории менялись. Актуальность данных этого ответа не подтверждена"},
+		{"already-unverified", []assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED, 99}, []any{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := &assistantv1.AnswerSource{CalculatedAt: created, TransferMode: commonv1.TransferMode_TRANSFER_MODE_WITHOUT, ChangedSince: tc.codes}
@@ -76,3 +78,5 @@ func scenarioAssistantSourceRevisions(t *testing.T, start starter) {
 		})
 	}
 }
+
+func TestAPIAssistantSourceRevisions(t *testing.T) { scenarioAssistantSourceRevisions(t, startBFF) }

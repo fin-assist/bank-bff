@@ -18,6 +18,9 @@ func TestUnitSourceRevisionStatuses(t *testing.T) {
 	}{
 		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED}, []string{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
 		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_TIME_ZONE}, []string{"time_zone"}, "Обновились настройки часового пояса"},
+		{[]assistantv1.ChangedSince{99}, []string{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
+		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_CATEGORIES, 99}, []string{"categories", "unverified"}, "с тех пор категории менялись. Актуальность данных этого ответа не подтверждена"},
+		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED, 99, 99}, []string{"unverified"}, "Актуальность данных этого ответа не подтверждена"},
 		{[]assistantv1.ChangedSince{assistantv1.ChangedSince_CHANGED_SINCE_CATEGORIES, assistantv1.ChangedSince_CHANGED_SINCE_UNVERIFIED, assistantv1.ChangedSince_CHANGED_SINCE_TIME_ZONE}, []string{"categories", "unverified", "time_zone"}, "с тех пор категории менялись. Актуальность данных этого ответа не подтверждена. Обновились настройки часового пояса"},
 	} {
 		u.f.list = func(*assistantv1.ListMessagesRequest) (*assistantv1.ListMessagesResponse, error) {

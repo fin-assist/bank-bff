@@ -67,7 +67,7 @@
 
 ### Совместимая выкладка ошибок FIN-342
 
-Go-зависимость BFF — `contracts/gen/go v0.5.0`, тег на `471482b1dd0d8ec556325ef5d57d5658502f8570`. Это версия типов и декодера, она не доказывает возможности запущенного `assistant`. Отдельной переменной среды или эвристики по `text`/`error_text` для определения возможностей нет.
+Go-зависимость BFF — `contracts/gen/go v0.6.0`, тег на `1c624f506ad3517a6f8b665dfe2bf835e43b078b`. Это версия типов и декодера, она не доказывает возможности запущенного `assistant`. Отдельной переменной среды или эвристики по `text`/`error_text` для определения возможностей нет.
 
 Нижняя поддерживаемая исходная ревизия `assistant` для этого BFF — `3ef9e08632af3d27564bd8d4f1278478db74684a` (merge PR #15, FIN-220/FIN-161) или её потомок с сохранённой семантикой FIN-159. В ней терминальный `AnswerError.retryable` передаёт явный `false`, история заполняет presence-aware `Message.retryable`, а `RetryAnswer` проверяет сохранённое разрешение сервиса. См. [mapper.go](https://github.com/fin-assist/assistant/blob/3ef9e08632af3d27564bd8d4f1278478db74684a/internal/adapter/grpc/dialogue/mapper.go#L480) и [asking.go](https://github.com/fin-assist/assistant/blob/3ef9e08632af3d27564bd8d4f1278478db74684a/internal/adapter/postgres/asking.go#L98). На момент проверки 26.10.2026 именованных тегов и GitHub releases у сервиса нет, поэтому граница фиксируется SHA, без выдуманной версии релиза.
 

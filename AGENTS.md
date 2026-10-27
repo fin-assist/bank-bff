@@ -39,7 +39,7 @@ ENV=dev builds no public API (NewAssembly refuses dev): no auth bypass. Pre-stre
 JSON; streams extend their own connection deadlines and have their own deadline and caps.
 Add an infrastructure dependency only for a real endpoint/usecase; no dummy code for coverage.
 
-FIN-342 uses tagged contracts/gen/go v0.5.0. REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
+Current tagged contracts/gen/go is v0.6.0 (FIN-367/FIN-368). FIN-342 REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
 the declared safety of the entire REST operation; an unknown keyed POST replay window stays false.
 Do not infer permission from an error code, HTTP status, RetryInfo, text or UUID. Nested result Status
 is decoded only by finerr.DecodeResultStatus: valid canonical reason wins, present-invalid never reads
@@ -149,3 +149,7 @@ No financial calculation, pairing, category choice or tenant authorization moves
 ## Assistant source freshness (FIN-368)
 
 FIN-368: source conversion preserves open `unverified`/`time_zone` codes and ready Russian fallback text in history, snapshots and source events. Internal revision vectors never become REST fields.
+
+An unmapped gRPC freshness enum also produces `unverified` with its ready text and the bounded translation metric, including mixed known/unknown reasons. Empty `changed_since` is reserved for confirmed equality. The new full public source/encoding flows are API-only; component integration composes neighbor gRPC/source mapping or HTTP/JWT/rest validation with a probe RPC, without the full public API assembly.
+
+FIN-339 canonical OpenAPI adoption validates examples/defaults and rejects unsupported, empty or repeated Content-Encoding before JSON body reads on the six agreed operations only. Invalid encoding requests connection close and skips the application drain; auth/gates and other body/upload policies retain their order.

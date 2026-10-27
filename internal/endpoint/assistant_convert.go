@@ -197,25 +197,30 @@ func (c converter) source(s *assistantv1.AnswerSource) *Source {
 		TransferMode: transferMode(s.GetTransferMode()), ChangedSince: []string{}}
 	var phrases, statuses []string
 	unknown := false
+	seen := map[string]bool{}
 	for _, ch := range s.GetChangedSince() {
-		code, ok := enumCode(ch)
-		if !ok {
+		code, known := enumCode(ch)
+		text, statusKnown := sourceStatusTexts[code]
+		phrase, changeKnown := changedPhrases[code]
+		if !known || !statusKnown && !changeKnown {
 			unknown = true
 			c.metrics.Untranslated("AnswerSource.changed_since", "unknown")
 			continue
 		}
+		if seen[code] {
+			continue
+		}
+		seen[code] = true
 		out.ChangedSince = append(out.ChangedSince, code)
-		if text, ok := sourceStatusTexts[code]; ok {
+		if statusKnown {
 			statuses = append(statuses, text)
-		} else if phrase, ok := changedPhrases[code]; ok {
-			phrases = append(phrases, phrase)
 		} else {
-			unknown = true
-			c.metrics.Untranslated("AnswerSource.changed_since", "unknown")
+			phrases = append(phrases, phrase)
 		}
 	}
-	if unknown {
-		phrases = append(phrases, "данные менялись")
+	if unknown && !seen["unverified"] {
+		out.ChangedSince = append(out.ChangedSince, "unverified")
+		statuses = append(statuses, sourceStatusTexts["unverified"])
 	}
 	if len(phrases) > 0 {
 		statuses = append([]string{"с тех пор " + strings.Join(phrases, " и ")}, statuses...)

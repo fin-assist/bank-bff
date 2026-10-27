@@ -26,6 +26,27 @@ func TooLarge() Error {
 	return Error{Status: http.StatusRequestEntityTooLarge, Code: "REQUEST_TOO_LARGE"}
 }
 
+// jsonEncodingRefusal implements FIN-339 only for its six agreed JSON operations.
+// A repeated header is invalid even when both tokens are identity. HTTP OWS is
+// normalized by net/http; trim SP/HTAB here as well for in-process callers.
+func jsonEncodingRefusal(r *http.Request, op apispec.Operation) *Error {
+	switch op.Route.Operation.OperationID {
+	case "startPhoneVerification", "register", "refreshTokens", "logout", "grantAssistantConsent", "askAssistant":
+	default:
+		return nil
+	}
+	values := r.Header.Values("Content-Encoding")
+	if len(values) == 0 {
+		return nil
+	}
+	if len(values) == 1 && strings.EqualFold(strings.Trim(values[0], " \t"), "identity") {
+		r.Header.Set("Content-Encoding", strings.Trim(values[0], " \t"))
+		return nil
+	}
+	refusal := Validation(Detail{Field: "Content-Encoding", Code: DetailInvalidFormat, Message: detailMessage(DetailInvalidFormat)})
+	return &refusal
+}
+
 // ReadBody reads the request body within limit. An operation without a request body
 // accepts none: any body is a validation error, and at most one byte of it is read.
 func ReadBody(r *http.Request, op apispec.Operation, limit int64) ([]byte, *Error) {

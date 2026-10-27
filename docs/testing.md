@@ -1,5 +1,7 @@
 # Проверки bank-bff
 
+В FIN-368/FIN-339 новые полные публичные сценарии актуальности history/snapshot/source и Content-Encoding выполняются только как `TestAPI…` на `app.Run`. Их independent integration собирают компоненты отдельно: реальный gRPC-сосед → source mapper; настоящий HTTP listener → rest pipeline с JWT identity → probe RPC. Полная публичная API-сборка не переименовывается в integration для нового поведения.
+
 FIN-261 перенёс инфраструктуру HTTP BFF из go-service-template с независимыми gates FIN-238; FIN-268 добавил публичный API. Все три набора инструментируют одинаковый весь production-модуль (`-coverpkg=./...`), без исключений. Каждый требует total80 statements через закреплённый `go-test-coverage v2.20.1`; принятое округление 79,95% → 80,0%. Combined — справочное объединение штатным инструментом, не компенсация провала уровня.
 
 - `TestUnit…`: конфигурация и её документация; operational handlers без сети; command usage/ошибки конфигурации; lifecycle на фейках consumer-интерфейса — отмена, отказ Serve, ограниченный shutdown, сохранение ошибок, снятие readiness.
