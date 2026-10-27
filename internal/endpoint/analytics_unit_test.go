@@ -180,9 +180,9 @@ func TestUnitAnalyticsIncompleteServiceResponsesFailClosed(t *testing.T) {
 		{"period", "GetAnalyticsResponse.period", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period = nil }},
 		{"state", "GetAnalyticsResponse.state", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.State = nil }},
 		{"range", "GetAnalyticsResponse.period.range", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range = nil }},
-		{"start", "GetAnalyticsResponse.period.range.from", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range.Start = nil }},
-		{"end", "GetAnalyticsResponse.period.range.to", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range.End = nil }},
-		{"bad start", "GetAnalyticsResponse.period.range.from", "invalid", func(r *analyticsv1.GetAnalyticsResponse) {
+		{"start", "GetAnalyticsResponse.period.range.start", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range.Start = nil }},
+		{"end", "GetAnalyticsResponse.period.range.end", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range.End = nil }},
+		{"bad start", "GetAnalyticsResponse.period.range.start", "invalid", func(r *analyticsv1.GetAnalyticsResponse) {
 			r.Period.Range.Start = &timestamppb.Timestamp{Seconds: 253402300800}
 		}},
 		{"bounds", "GetAnalyticsResponse.period.bounds", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds = nil }},
@@ -190,7 +190,7 @@ func TestUnitAnalyticsIncompleteServiceResponsesFailClosed(t *testing.T) {
 		{"data to", "GetAnalyticsResponse.state.data_to", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.State.DataTo = nil }},
 		{"calculated at", "GetAnalyticsResponse.state.calculated_at", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.State.CalculatedAt = nil }},
 		{"gap", "GetAnalyticsResponse.period.bounds.gaps", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds.Gaps = []*commonv1.TimeRange{nil} }},
-		{"gap end", "GetAnalyticsResponse.period.bounds.gaps.to", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds.Gaps[0].End = nil }},
+		{"gap end", "GetAnalyticsResponse.period.bounds.gaps.end", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds.Gaps[0].End = nil }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -214,18 +214,19 @@ func TestUnitAnalyticsIncompleteServiceResponsesFailClosed(t *testing.T) {
 			}
 		})
 	}
-	for _, mutate := range []func(*analyticsv1.PeriodItem){func(p *analyticsv1.PeriodItem) { p.Range = nil }, func(p *analyticsv1.PeriodItem) { p.Range.Start = nil }, func(p *analyticsv1.PeriodItem) { p.Range.End = nil }, func(p *analyticsv1.PeriodItem) { p.Range.End = &timestamppb.Timestamp{Nanos: -1} }} {
+	for _, tc := range incompletePeriodCases() {
 		u := newUnitAPI(t, rest.StreamLimits{})
 		in := &analyticsv1.PeriodItem{Key: "2026", Range: analyticsFixture().Period.Range}
-		mutate(in)
+		tc.mutate(in)
 		u.f.analyticsList = func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
 			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{in}}, nil
 		}
 		r := u.serve(t, "GET", "/v1/analytics/periods", "", nil)
-		if r.Code != 500 || r.code() != "INTERNAL_ERROR" {
-			t.Fatal(r.Code, r.Body.String())
+		if r.Code != 500 || r.code() != "INTERNAL_ERROR" || unitAnalyticsCounter(t, u, tc.field, tc.code) != 1 {
+			t.Fatal(tc.field, tc.code, r.Code, r.Body.String())
 		}
 	}
+
 }
 
 func TestUnitAnalyticsStructNonfiniteBinaryRoundtrip(t *testing.T) {
@@ -245,6 +246,137 @@ func TestUnitAnalyticsStructNonfiniteBinaryRoundtrip(t *testing.T) {
 	r := u.serve(t, "GET", "/v1/analytics", "", nil)
 	want := map[string]any{"nan": "NaN", "inf": "Infinity", "negative_inf": "-Infinity"}
 	if r.Code != 200 || !reflect.DeepEqual(r.json["blocks"].([]any)[0].(map[string]any)["data"], want) {
+		t.Fatal(r.Code, r.Body.String())
+	}
+}
+
+type incompletePeriod struct {
+	field, code string
+	mutate      func(*analyticsv1.PeriodItem)
+}
+
+func incompletePeriodCases() []incompletePeriod {
+	return []incompletePeriod{
+		{"ListPeriodsResponse.periods.range", "absent", func(p *analyticsv1.PeriodItem) { p.Range = nil }},
+		{"ListPeriodsResponse.periods.range.start", "absent", func(p *analyticsv1.PeriodItem) { p.Range.Start = nil }},
+		{"ListPeriodsResponse.periods.range.end", "absent", func(p *analyticsv1.PeriodItem) { p.Range.End = nil }},
+		{"ListPeriodsResponse.periods.range.end", "invalid", func(p *analyticsv1.PeriodItem) { p.Range.End = &timestamppb.Timestamp{Nanos: -1} }},
+		{"ListPeriodsResponse.periods.key", "absent", func(p *analyticsv1.PeriodItem) { p.Key = "" }},
+		{"ListPeriodsResponse.periods.key", "invalid", func(p *analyticsv1.PeriodItem) { p.Key = "2026-13" }},
+	}
+}
+
+func unitAnalyticsCounter(t *testing.T, u *unitAPI, field, code string) float64 {
+	t.Helper()
+	families, err := u.reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "finassist_untranslated_code_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := map[string]string{}
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["field"] == field && labels["code"] == code {
+				return metric.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
+}
+
+func TestUnitAnalyticsCalendarKeys(t *testing.T) {
+	for _, key := range []string{"0001", "9999", "2026-01", "2026-12", "2026-Q1", "2026-Q4"} {
+		u := newUnitAPI(t, rest.StreamLimits{})
+		in := analyticsFixture()
+		in.Params.PeriodKey = key
+		in.Navigation = &analyticsv1.Navigation{Previous: proto.String(key), Next: proto.String(key)}
+		u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return in, nil }
+		u.f.analyticsList = func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
+			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: key, Range: in.Period.Range}}}, nil
+		}
+		for _, path := range []string{"/v1/analytics", "/v1/analytics/periods"} {
+			if r := u.serve(t, "GET", path, "", nil); r.Code != 200 {
+				t.Fatal(key, r.Code, r.Body.String())
+			}
+		}
+	}
+	for _, key := range []string{"", "2026-00", "2026-13", "2026-Q0", "2026-Q5", "2026-1", "26", "2026-09-extra", "2026-W01"} {
+		for _, target := range []string{"params", "previous", "next", "periods"} {
+			u := newUnitAPI(t, rest.StreamLimits{})
+			in := analyticsFixture()
+			field := "GetAnalyticsResponse.params.period_key"
+			switch target {
+			case "params":
+				in.Params.PeriodKey = key
+			case "previous":
+				in.Navigation.Previous = &key
+				field = "GetAnalyticsResponse.navigation.previous"
+			case "next":
+				in.Navigation.Next = &key
+				field = "GetAnalyticsResponse.navigation.next"
+			case "periods":
+				field = "ListPeriodsResponse.periods.key"
+			}
+			u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return in, nil }
+			u.f.analyticsList = func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
+				return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: key, Range: in.Period.Range}}}, nil
+			}
+			path := "/v1/analytics"
+			if target == "periods" {
+				path += "/periods"
+			}
+			r := u.serve(t, "GET", path, "", nil)
+			code := "invalid"
+			if key == "" {
+				code = "absent"
+			}
+			if r.Code != 500 || r.code() != "INTERNAL_ERROR" || unitAnalyticsCounter(t, u, field, code) != 1 {
+				t.Fatal(target, key, r.Code, r.Body.String())
+			}
+		}
+	}
+}
+
+func TestUnitAnalyticsOptionalTimestamps(t *testing.T) {
+	for _, field := range []string{"period.bounds.data_from", "period.bounds.data_to", "state.last_operation_at", "blocks.lock.available_from", "blocks.action.filter.from", "blocks.action.filter.to"} {
+		for _, bad := range []*timestamppb.Timestamp{{Seconds: 253402300800}, {Nanos: -1}, {Seconds: 253402300799}} {
+			u := newUnitAPI(t, rest.StreamLimits{})
+			in := analyticsFixture()
+			in.Blocks = []*commonv1.Block{{Type: "future", V: 1, Lock: &commonv1.BlockLock{Text: "provided"}, Action: &commonv1.BlockAction{Type: "future", Filter: &commonv1.OperationsFilter{}}}}
+			switch field {
+			case "period.bounds.data_from":
+				in.Period.Bounds.DataFrom = bad
+			case "period.bounds.data_to":
+				in.Period.Bounds.DataTo = bad
+			case "state.last_operation_at":
+				in.State.LastOperationAt = bad
+			case "blocks.lock.available_from":
+				in.Blocks[0].Lock.AvailableFrom = bad
+			case "blocks.action.filter.from":
+				in.Blocks[0].Action.Filter.From = bad
+			case "blocks.action.filter.to":
+				in.Blocks[0].Action.Filter.To = bad
+			}
+			u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return in, nil }
+			r := u.serve(t, "GET", "/v1/analytics", "", nil)
+			if r.Code != 500 || r.code() != "INTERNAL_ERROR" || unitAnalyticsCounter(t, u, "GetAnalyticsResponse."+field, "invalid") != 1 {
+				t.Fatal(field, r.Code, r.Body.String())
+			}
+		}
+	}
+	u := newUnitAPI(t, rest.StreamLimits{})
+	in := analyticsFixture()
+	in.Period.Bounds.DataFrom = nil
+	in.Period.Bounds.DataTo = nil
+	in.State.LastOperationAt = nil
+	in.Blocks = []*commonv1.Block{{Type: "future", V: 1, Lock: &commonv1.BlockLock{Text: "provided"}, Action: &commonv1.BlockAction{Type: "future", Filter: &commonv1.OperationsFilter{}}}}
+	u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return in, nil }
+	if r := u.serve(t, "GET", "/v1/analytics", "", nil); r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 }

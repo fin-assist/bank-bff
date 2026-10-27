@@ -49,3 +49,7 @@ Unit покрывает преобразования/presence, malformed syntax/
 Полученные пустые currency/верхний lock.text считаются даже перед отказом другого поля; legacy MetricLock.text
 остаётся нулём, вложенный Struct не исследуется. Binary protobuf roundtrip с NaN/±Inf проходит gRPC и HTTP:
 Struct.AsMap преобразует их в строки NaN/Infinity/-Infinity, тело200 остаётся корректным JSON.
+
+`AnalyticsEnvelope` и unit-регрессии проверяют формат каждого календарного ключа (params, periods,
+присутствующие navigation), каждый optional Timestamp при наличии и отсутствие optional без подстановки.
+Неполные ListPeriods закрепляют точные пары field/code и прирост счётчика на всех трёх уровнях.

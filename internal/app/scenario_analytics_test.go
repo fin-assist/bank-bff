@@ -326,16 +326,16 @@ func scenarioAnalyticsMalformed(t *testing.T, start starter) {
 		{"GetAnalyticsResponse.period", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period = nil }},
 		{"GetAnalyticsResponse.period.bounds", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds = nil }},
 		{"GetAnalyticsResponse.period.range", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range = nil }},
-		{"GetAnalyticsResponse.period.range.from", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range.Start = nil }},
-		{"GetAnalyticsResponse.period.range.to", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range.End = nil }},
-		{"GetAnalyticsResponse.period.range.from", "invalid", func(r *analyticsv1.GetAnalyticsResponse) {
+		{"GetAnalyticsResponse.period.range.start", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range.Start = nil }},
+		{"GetAnalyticsResponse.period.range.end", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Range.End = nil }},
+		{"GetAnalyticsResponse.period.range.start", "invalid", func(r *analyticsv1.GetAnalyticsResponse) {
 			r.Period.Range.Start = &timestamppb.Timestamp{Seconds: 253402300800}
 		}},
 		{"GetAnalyticsResponse.state.data_from", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.State.DataFrom = nil }},
 		{"GetAnalyticsResponse.state.data_to", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.State.DataTo = nil }},
 		{"GetAnalyticsResponse.state.calculated_at", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.State.CalculatedAt = nil }},
-		{"GetAnalyticsResponse.period.bounds.gaps.from", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds.Gaps = []*commonv1.TimeRange{{}} }},
-		{"GetAnalyticsResponse.period.bounds.gaps.to", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds.Gaps[0].End = nil }},
+		{"GetAnalyticsResponse.period.bounds.gaps.start", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds.Gaps = []*commonv1.TimeRange{{}} }},
+		{"GetAnalyticsResponse.period.bounds.gaps.end", "absent", func(r *analyticsv1.GetAnalyticsResponse) { r.Period.Bounds.Gaps[0].End = nil }},
 	}
 	for _, tc := range cases {
 		in := analyticsMessage(t)
@@ -360,19 +360,21 @@ func scenarioAnalyticsMalformed(t *testing.T, start starter) {
 			t.Fatal("empty service fields must count before unrelated rejection")
 		}
 	}
-	for _, mutate := range []func(*analyticsv1.PeriodItem){func(p *analyticsv1.PeriodItem) { p.Range = nil }, func(p *analyticsv1.PeriodItem) { p.Range.Start = nil }, func(p *analyticsv1.PeriodItem) { p.Range.End = nil }, func(p *analyticsv1.PeriodItem) { p.Range.End = &timestamppb.Timestamp{Nanos: -1} }} {
+	for _, tc := range malformedPeriodItems() {
 		in := &analyticsv1.PeriodItem{Key: "2026", Range: analyticsMessage(t).Period.Range}
-		mutate(in)
+		tc.mutate(in)
+		before := b.analyticsCounter(t, "finassist_untranslated_code_total", tc.field, tc.code)
 		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
 			a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
 				return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{in}}, nil
 			}
 		})
 		r := b.do(t, request{method: "GET", path: "/v1/analytics/periods", route: "/v1/analytics/periods", header: auth})
-		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" {
-			t.Fatal(r.StatusCode, string(r.body))
+		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || b.analyticsCounter(t, "finassist_untranslated_code_total", tc.field, tc.code) != before+1 {
+			t.Fatal(tc.field, tc.code, r.StatusCode, string(r.body))
 		}
 	}
+
 	// Nonfinite binary protobuf numbers are deliberately converted to the documented
 	// Struct.AsMap string representation, not a JSON encoding error or empty 200.
 	in := analyticsMessage(t)
@@ -414,5 +416,110 @@ func scenarioAnalyticsMalformed(t *testing.T, start starter) {
 	}
 	if got := b.analyticsCounter(t, "finassist_empty_required_field_total", "MetricLock.text", ""); got != 0 {
 		t.Fatal("legacy typed MetricLock must remain zero", got)
+	}
+}
+
+type malformedPeriodItem struct {
+	field, code string
+	mutate      func(*analyticsv1.PeriodItem)
+}
+
+func malformedPeriodItems() []malformedPeriodItem {
+	return []malformedPeriodItem{
+		{"ListPeriodsResponse.periods.range", "absent", func(p *analyticsv1.PeriodItem) { p.Range = nil }},
+		{"ListPeriodsResponse.periods.range.start", "absent", func(p *analyticsv1.PeriodItem) { p.Range.Start = nil }},
+		{"ListPeriodsResponse.periods.range.end", "absent", func(p *analyticsv1.PeriodItem) { p.Range.End = nil }},
+		{"ListPeriodsResponse.periods.range.end", "invalid", func(p *analyticsv1.PeriodItem) { p.Range.End = &timestamppb.Timestamp{Nanos: -1} }},
+		{"ListPeriodsResponse.periods.key", "absent", func(p *analyticsv1.PeriodItem) { p.Key = "" }},
+		{"ListPeriodsResponse.periods.key", "invalid", func(p *analyticsv1.PeriodItem) { p.Key = "2026-13" }},
+	}
+}
+
+func scenarioAnalyticsEnvelope(t *testing.T, start starter) {
+	b := start(t, nil)
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	for _, key := range []string{"", "2026-00", "2026-13", "2026-Q0", "2026-Q5", "2026-1", "26", "2026-09-extra", "2026-W01"} {
+		for _, target := range []string{"params", "previous", "next", "periods"} {
+			in := analyticsMessage(t)
+			field := "GetAnalyticsResponse.params.period_key"
+			switch target {
+			case "params":
+				in.Params.PeriodKey = key
+			case "previous":
+				in.Navigation.Previous = &key
+				field = "GetAnalyticsResponse.navigation.previous"
+			case "next":
+				in.Navigation.Next = &key
+				field = "GetAnalyticsResponse.navigation.next"
+			case "periods":
+				field = "ListPeriodsResponse.periods.key"
+			}
+			b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+				a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+					return in, nil
+				}
+				a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
+					return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: key, Range: in.Period.Range}}}, nil
+				}
+			})
+			code := "invalid"
+			if key == "" {
+				code = "absent"
+			}
+			before := b.analyticsCounter(t, "finassist_untranslated_code_total", field, code)
+			path := "/v1/analytics"
+			if target == "periods" {
+				path += "/periods"
+			}
+			r := b.do(t, request{method: "GET", path: path, route: path, header: auth})
+			if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || b.analyticsCounter(t, "finassist_untranslated_code_total", field, code) != before+1 {
+				t.Fatal(target, key, r.StatusCode, string(r.body))
+			}
+		}
+	}
+	for _, field := range []string{"period.bounds.data_from", "period.bounds.data_to", "state.last_operation_at", "blocks.lock.available_from", "blocks.action.filter.from", "blocks.action.filter.to"} {
+		for _, bad := range []*timestamppb.Timestamp{{Seconds: 253402300800}, {Nanos: -1}, {Seconds: 253402300799}} {
+			in := analyticsMessage(t)
+			switch field {
+			case "period.bounds.data_from":
+				in.Period.Bounds.DataFrom = bad
+			case "period.bounds.data_to":
+				in.Period.Bounds.DataTo = bad
+			case "state.last_operation_at":
+				in.State.LastOperationAt = bad
+			case "blocks.lock.available_from":
+				in.Blocks[4].Lock.AvailableFrom = bad
+			case "blocks.action.filter.from":
+				in.Blocks[1].Action.Filter.From = bad
+			case "blocks.action.filter.to":
+				in.Blocks[1].Action.Filter.To = bad
+			}
+			b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+				a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+					return in, nil
+				}
+			})
+			before := b.analyticsCounter(t, "finassist_untranslated_code_total", "GetAnalyticsResponse."+field, "invalid")
+			r := b.do(t, request{method: "GET", path: "/v1/analytics", route: "/v1/analytics", header: auth})
+			if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || b.analyticsCounter(t, "finassist_untranslated_code_total", "GetAnalyticsResponse."+field, "invalid") != before+1 {
+				t.Fatal(field, r.StatusCode, string(r.body))
+			}
+		}
+	}
+	in := analyticsMessage(t)
+	in.Period.Bounds.DataFrom = nil
+	in.Period.Bounds.DataTo = nil
+	in.State.LastOperationAt = nil
+	in.Blocks[4].Lock.AvailableFrom = nil
+	in.Blocks[1].Action.Filter.From = nil
+	in.Blocks[1].Action.Filter.To = nil
+	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+		a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+			return in, nil
+		}
+	})
+	r := b.do(t, request{method: "GET", path: "/v1/analytics", route: "/v1/analytics", header: auth})
+	if r.StatusCode != 200 || r.json["state"].(map[string]any)["last_operation_at"] != nil || r.json["period"].(map[string]any)["data_from"] != nil {
+		t.Fatal(r.StatusCode, string(r.body))
 	}
 }

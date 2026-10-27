@@ -89,7 +89,7 @@ ReadHeaderTimeout 5s, ReadTimeout 10s, WriteTimeout 30s, IdleTimeout 60s, MaxHea
 | `finassist_http_requests_total` | `route` (шаблон), `status`, `client` (платформа из `CLIENT_MIN_VERSIONS`: версия любой допустимой формы прошла бы шлюз и засорила бы метку) |
 | `finassist_http_request_duration_seconds` | `route` |
 | `finassist_unmapped_error_total` | `reason` (форма реестра, не больше 32, затем `other`; `none`, `invalid`), `grpc_code` |
-| `finassist_untranslated_code_total` | `field`, `code` (`unknown`, `content`) |
+| `finassist_untranslated_code_total` | `field` (константы вызывающего кода), `code` (`unknown`, `content`, `absent`, `invalid`, `legacy_mismatch`) |
 | `finassist_empty_required_field_total` | `field`: `Block.lock.text`, `MetricLock.text`, `GetAnalyticsResponse.currency`, `Message.currency`, `AnswerSnapshot.currency` (ряды с 0 при старте) |
 | `finassist_sse_streams` | `route` |
 | `finassist_sse_rejected_total` | `route`: SSE и POST /v1/statements, отклонённые локальным бюджетом |
@@ -155,3 +155,10 @@ params/period/state/bounds и пустой period_key также диагнос�
 Empty-required считает полученные пустые currency/верхние lock.text и до отказа из-за другого поля, как
 требует grpc-api5.3. Серия MetricLock.text сохранена по контракту, но постоянно нулевая: устаревшая typed
 модель метрик не обслуживается BFF. Она не измеряет вложенные TileLock внутри Struct; их проверяет клиент.
+
+Calendar keys params.period_key, periods.key и присутствующие navigation.previous/next проверяются по
+формату PeriodKey встроенного OpenAPI; пустой ключ даёт absent, неверный формат — invalid и безопасный500.
+Присутствующие optional Timestamp нового ответа также проходят CheckValid: bounds.data_from/data_to,
+state.last_operation_at, верхний lock.available_from и action.filter.from/to. Отсутствие остаётся отсутствием;
+невалидное значение —500 с точным proto-путём/invalid. Диагностика TimeRange использует proto-имена start/end,
+а не REST from/to. Вложенные Struct-поля остаются непрозрачными; другие converters не менялись.

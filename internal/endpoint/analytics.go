@@ -103,7 +103,7 @@ func (d Deps) analyticsPeriods(c *rest.Call) {
 	conv := converter{loc: zone(resp.GetTimeZone()), metrics: c.Metrics}
 	items := make([]analyticsPeriodItem, 0, len(resp.GetPeriods()))
 	for _, p := range resp.GetPeriods() {
-		if !conv.analyticsRange(p.GetRange(), "ListPeriodsResponse.periods.range") {
+		if !conv.analyticsPeriodKey(p.GetKey(), "ListPeriodsResponse.periods.key") || !conv.analyticsRange(p.GetRange(), "ListPeriodsResponse.periods.range") {
 			rest.Internal().Write(c.W)
 			return
 		}

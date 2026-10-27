@@ -1,6 +1,8 @@
 package endpoint
 
 import (
+	"regexp"
+
 	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -127,8 +129,8 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 	if _, ok := enumCode(pms.GetPeriod()); !ok {
 		return c.analyticsInvalid("GetAnalyticsResponse.params.period", "unknown")
 	}
-	if pms.GetPeriodKey() == "" {
-		return c.analyticsInvalid("GetAnalyticsResponse.params.period_key", "absent")
+	if !c.analyticsPeriodKey(pms.GetPeriodKey(), "GetAnalyticsResponse.params.period_key") {
+		return analyticsResponse{}, false
 	}
 	out.Params, _ = analyticsParams(pms)
 	if resp.GetPeriod() == nil {
@@ -156,6 +158,9 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 			return analyticsResponse{}, false
 		}
 	}
+	if !c.analyticsOptionals(resp) {
+		return analyticsResponse{}, false
+	}
 	p := resp.GetPeriod()
 	bounds := p.GetBounds()
 	out.Period = &analyticsPeriod{Range: timeRange(p.GetRange(), c.loc), IsCurrent: p.GetIsCurrent(), Coverage: c.coverageCode(bounds.GetCoverage(), "GetAnalyticsResponse.period.bounds.coverage"), DataFrom: optionalMoment(bounds.GetDataFrom(), c.loc), DataTo: optionalMoment(bounds.GetDataTo(), c.loc), Gaps: []*Range{}}
@@ -168,6 +173,14 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 	n := resp.GetNavigation()
 	out.Navigation = &analyticsNavigation{}
 	if n != nil {
+		for _, key := range []struct {
+			value *string
+			field string
+		}{{n.Previous, "GetAnalyticsResponse.navigation.previous"}, {n.Next, "GetAnalyticsResponse.navigation.next"}} {
+			if key.value != nil && !c.analyticsPeriodKey(*key.value, key.field) {
+				return analyticsResponse{}, false
+			}
+		}
 		out.Navigation.Previous, out.Navigation.Next = n.Previous, n.Next
 	}
 	s := resp.GetState()
@@ -191,6 +204,16 @@ func (c converter) analyticsMoment(value *timestamppb.Timestamp, field string) b
 		c.metrics.Untranslated(field, "invalid")
 		return false
 	}
+	// A valid UTC Timestamp at a calendar edge can leave RFC3339's four-digit
+	// year range after formatting in the response zone. Refuse that projection too.
+	local := value.AsTime()
+	if c.loc != nil {
+		local = local.In(c.loc)
+	}
+	if local.Year() < 1 || local.Year() > 9999 {
+		c.metrics.Untranslated(field, "invalid")
+		return false
+	}
 	return true
 }
 
@@ -199,5 +222,57 @@ func (c converter) analyticsRange(value *commonv1.TimeRange, field string) bool 
 		c.metrics.Untranslated(field, "absent")
 		return false
 	}
-	return c.analyticsMoment(value.GetStart(), field+".from") && c.analyticsMoment(value.GetEnd(), field+".to")
+	return c.analyticsMoment(value.GetStart(), field+".start") && c.analyticsMoment(value.GetEnd(), field+".end")
+}
+
+// analyticsKeyShape is PeriodKey from the embedded OpenAPI. These are calendar
+// labels, never instants; validating syntax does not convert or choose a period.
+var analyticsKeyShape = regexp.MustCompile(`^[0-9]{4}(-(0[1-9]|1[0-2])|-Q[1-4])?$`)
+
+func (c converter) analyticsPeriodKey(value, field string) bool {
+	if value == "" {
+		c.metrics.Untranslated(field, "absent")
+		return false
+	}
+	if !analyticsKeyShape.MatchString(value) {
+		c.metrics.Untranslated(field, "invalid")
+		return false
+	}
+	return true
+}
+
+func (c converter) analyticsOptionalMoment(value *timestamppb.Timestamp, field string) bool {
+	return value == nil || c.analyticsMoment(value, field)
+}
+
+// analyticsOptionals validates only typed Timestamp fields owned by this new
+// projection. Opaque Struct data and the shared assistant/import converters stay untouched.
+func (c converter) analyticsOptionals(resp *analyticsv1.GetAnalyticsResponse) bool {
+	for _, f := range []struct {
+		value *timestamppb.Timestamp
+		field string
+	}{
+		{resp.GetPeriod().GetBounds().GetDataFrom(), "GetAnalyticsResponse.period.bounds.data_from"},
+		{resp.GetPeriod().GetBounds().GetDataTo(), "GetAnalyticsResponse.period.bounds.data_to"},
+		{resp.GetState().GetLastOperationAt(), "GetAnalyticsResponse.state.last_operation_at"},
+	} {
+		if !c.analyticsOptionalMoment(f.value, f.field) {
+			return false
+		}
+	}
+	for _, block := range resp.GetBlocks() {
+		for _, f := range []struct {
+			value *timestamppb.Timestamp
+			field string
+		}{
+			{block.GetLock().GetAvailableFrom(), "GetAnalyticsResponse.blocks.lock.available_from"},
+			{block.GetAction().GetFilter().GetFrom(), "GetAnalyticsResponse.blocks.action.filter.from"},
+			{block.GetAction().GetFilter().GetTo(), "GetAnalyticsResponse.blocks.action.filter.to"},
+		} {
+			if !c.analyticsOptionalMoment(f.value, f.field) {
+				return false
+			}
+		}
+	}
+	return true
 }
