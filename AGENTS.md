@@ -118,3 +118,7 @@ negative startup/shutdown scenarios; unchanged strict guards and independent tot
 Only the 20 FIN-268/FIN-342 operations exist; do not require absent handlers solely to increase coverage, and do
 not treat passing tests as implementing unimplemented contract operations. Each served operation needs
 API tests for success, its declared errors, token, Idempotency-Key, schema, client version and SSE.
+
+## Stage artifacts (FIN-148)
+
+`scripts/stage_artifact.py` extracts the binary from the smoke-tested image; `docs/stage-artifacts.md` describes provenance, checks and retention. Keep its Python tests and CI image job in sync. Artifacts do not authorize deployment; only a successful main push CI is eligible for stage. GHCR/production delivery is still pending.
