@@ -145,6 +145,9 @@ func TestUnitOperationSearchMappingAndValidation(t *testing.T) {
 		}
 	}
 	// The search RPC alone receives the longer deadline.
+	if len(u.f.deadlines) != 5 {
+		t.Fatal("missing search deadline observations", u.f.deadlines)
+	}
 	for _, d := range u.f.deadlines {
 		if d <= 5*time.Second || d > SearchDeadline {
 			t.Fatal(d)
@@ -257,5 +260,96 @@ func TestUnitOperationPairAndOptionalFields(t *testing.T) {
 	r = u.serve(t, "PATCH", "/v1/operations/"+testKey, `{"category_id":"cat_own_transfer","occurred_at":"2026-01-01T00:00:00Z"}`, nil)
 	if r.Code != 200 || len(r.json["items"].([]any)) != 1 || r.json["replaced_id"] != nil {
 		t.Fatal(r.Code, r.Body.String())
+	}
+}
+
+func TestUnitOperationKindDescriptorRoundTrip(t *testing.T) {
+	values := commonv1.KindFilter_KIND_FILTER_UNSPECIFIED.Descriptor().Values()
+	accepted := 0
+	for i := 0; i < values.Len(); i++ {
+		kind := commonv1.KindFilter(values.Get(i).Number())
+		code, ok := enumCode(kind)
+		if !ok {
+			continue
+		}
+		accepted++
+		out := operationsFilter(&commonv1.OperationsFilter{Kind: kind}, time.UTC)
+		if out.Kind == nil || *out.Kind != code {
+			t.Fatal(kind, out)
+		}
+		got, ok := kindFilterCode(*out.Kind)
+		if !ok || got != kind {
+			t.Fatal(code, got, ok)
+		}
+	}
+	if accepted == 0 {
+		t.Fatal("no generated kind was checked")
+	}
+	for _, code := range []string{"", "unspecified", "not_a_generated_kind", "EXPENSE", "Expense"} {
+		if got, ok := kindFilterCode(code); ok {
+			t.Fatal(code, got)
+		}
+	}
+}
+
+func TestUnitOperationOtherMalformedReplies(t *testing.T) {
+	cases := []struct {
+		name, method, path, body, field, code string
+		setup                                 func(*operationFakes)
+	}{
+		{name: "search nil item", method: "GET", path: "/v1/operations?q=x", field: "Operation", code: "absent", setup: func(f *operationFakes) {
+			f.searchOperations = func(*statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
+				return &statementdatav1.SearchOperationsResponse{Items: []*statementdatav1.Operation{nil}}, nil
+			}
+		}},
+		{name: "search invalid item", method: "GET", path: "/v1/operations?q=x", field: "Operation.status", code: "unknown", setup: func(f *operationFakes) {
+			f.searchOperations = func(*statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
+				item := operationFixture()
+				item.Status = 99
+				return &statementdatav1.SearchOperationsResponse{Items: []*statementdatav1.Operation{item}}, nil
+			}
+		}},
+		{name: "search invalid range", method: "GET", path: "/v1/operations?q=x", field: "SearchOperationsResponse.range.end", code: "invalid", setup: func(f *operationFakes) {
+			f.searchOperations = func(*statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
+				return &statementdatav1.SearchOperationsResponse{Range: &commonv1.TimeRange{Start: operationFixture().OccurredAt, End: &timestamppb.Timestamp{Nanos: -1}}}, nil
+			}
+		}},
+		{name: "search nil response", method: "GET", path: "/v1/operations?q=x", field: "SearchOperationsResponse", code: "absent", setup: func(f *operationFakes) {
+			f.searchOperations = func(*statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
+				return nil, nil
+			}
+		}},
+		{name: "change invalid item", method: "PATCH", path: "/v1/operations/" + testKey, body: `{"category_id":"cat","occurred_at":"2026-01-01T00:00:00Z"}`, field: "Operation.kind", code: "unknown", setup: func(f *operationFakes) {
+			f.changeCategory = func(*statementdatav1.ChangeCategoryRequest) (*statementdatav1.ChangeCategoryResponse, error) {
+				item := operationFixture()
+				item.Kind = 99
+				return &statementdatav1.ChangeCategoryResponse{Items: []*statementdatav1.Operation{item}}, nil
+			}
+		}},
+		{name: "change nil response", method: "PATCH", path: "/v1/operations/" + testKey, body: `{"category_id":"cat","occurred_at":"2026-01-01T00:00:00Z"}`, field: "ChangeCategoryResponse", code: "absent", setup: func(f *operationFakes) {
+			f.changeCategory = func(*statementdatav1.ChangeCategoryRequest) (*statementdatav1.ChangeCategoryResponse, error) {
+				return nil, nil
+			}
+		}},
+		{name: "category nil item", method: "GET", path: "/v1/categories", field: "Category", code: "absent", setup: func(f *operationFakes) {
+			f.listCategories = func(*statementdatav1.ListCategoriesRequest) (*statementdatav1.ListCategoriesResponse, error) {
+				return &statementdatav1.ListCategoriesResponse{Categories: []*statementdatav1.Category{nil}}, nil
+			}
+		}},
+		{name: "category missing id", method: "GET", path: "/v1/categories", field: "Category.id", code: "absent", setup: func(f *operationFakes) {
+			f.listCategories = func(*statementdatav1.ListCategoriesRequest) (*statementdatav1.ListCategoriesResponse, error) {
+				return &statementdatav1.ListCategoriesResponse{Categories: []*statementdatav1.Category{{}}}, nil
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			u := newUnitAPI(t, rest.StreamLimits{})
+			tc.setup(u.operations)
+			r := u.serve(t, tc.method, tc.path, tc.body, nil)
+			if r.Code != 500 || r.code() != "INTERNAL_ERROR" || unitAnalyticsCounter(t, u, tc.field, tc.code) != 1 {
+				t.Fatal(r.Code, r.Body.String(), tc.field, tc.code)
+			}
+		})
 	}
 }

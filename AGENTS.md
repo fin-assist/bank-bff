@@ -141,4 +141,7 @@ presence selects SearchOperations; before+filter and all_time+from/to fail befor
 kind/status or invalid typed moments fail closed with bounded diagnostics. List projections omit details
 and spoken account fields; details keep service text, currencies and exact RFC3339Nano timestamps.
 PATCH category and PUT/DELETE dismissal are assignments, replay-safe only with explicit service advice.
+Their transport calls are never automatically retried by BFF: an applied split/join can replace the request
+ID and a lost response must not turn into NOT_FOUND from a hidden replay. This BFF exception preserves
+results even though grpc-api.md6/9 permits retries of construction-idempotent effects in general.
 No financial calculation, pairing, category choice or tenant authorization moves from the service to BFF.

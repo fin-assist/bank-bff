@@ -69,6 +69,19 @@ func (d Deps) listOperations(c *rest.Call) {
 	rest.WriteJSON(c.W, http.StatusOK, out)
 }
 
+// kindFilterCode is the inverse of enumCode for the same generated descriptor.
+// A newer generated kind is accepted exactly when this BFF can emit its code.
+func kindFilterCode(value string) (commonv1.KindFilter, bool) {
+	values := commonv1.KindFilter_KIND_FILTER_UNSPECIFIED.Descriptor().Values()
+	for i := 0; i < values.Len(); i++ {
+		kind := commonv1.KindFilter(values.Get(i).Number())
+		if code, ok := enumCode(kind); ok && code == value {
+			return kind, true
+		}
+	}
+	return commonv1.KindFilter_KIND_FILTER_UNSPECIFIED, false
+}
+
 func (d Deps) searchOperations(c *rest.Call, q url.Values) {
 	if q.Has("all_time") && (q.Has("from") || q.Has("to")) {
 		queryInvalid(c, "all_time")
@@ -122,12 +135,9 @@ func (d Deps) searchOperations(c *rest.Call, q url.Values) {
 		*field.target = &value
 	}
 	if q.Has("kind") {
-		switch q.Get("kind") {
-		case "expense":
-			f.Kind = commonv1.KindFilter_KIND_FILTER_EXPENSE
-		case "income":
-			f.Kind = commonv1.KindFilter_KIND_FILTER_INCOME
-		default:
+		var ok bool
+		f.Kind, ok = kindFilterCode(q.Get("kind"))
+		if !ok {
 			queryInvalid(c, "kind")
 			return
 		}
@@ -228,6 +238,11 @@ func (d Deps) listCategories(c *rest.Call) {
 	for _, item := range in.GetCategories() {
 		if item == nil {
 			c.Metrics.Untranslated("Category", "absent")
+			rest.Internal().Write(c.W)
+			return
+		}
+		if item.GetId() == "" {
+			c.Metrics.Untranslated("Category.id", "absent")
 			rest.Internal().Write(c.W)
 			return
 		}

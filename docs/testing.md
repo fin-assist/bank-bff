@@ -65,7 +65,16 @@ FIN-359: Operations/OperationMutations/OperationsErrorsAndGates/OperationLargeSe
 пустые массивы, signed user/service metadata/read-primary, отсутствие сырых user_id/cookie/key, все
 ошибки реестра по объявленным статусам, Retry-After и explicit retryable, чужие/отозванные данные,
 токен/версия/JSON/query/body до RPC и отсутствие финансовых данных в логах. Ответ поиска >4 МиБ проходит,
-такой же ответ деталей не проходит; поиск>16 МиБ ограничен. Неизвестные обязательные enum, неполная
+такой же ответ деталей не проходит; поиск >16 МиБ ограничен. Неизвестные обязательные enum, неполная
 оболочка и invalid typed Timestamp отклоняются 500; правила и преобразования покрыты отдельными unit.
 Финансовые правила, persistence и фактическая изоляция SQL проверяются в bank-statement-data (FIN-356),
 настоящая сквозная цепочка stage — FIN-362; BFF-тесты используют реальные HTTP/gRPC и bufconn peer-фейки.
+
+Ревью FIN-359: OperationMutationTransportLoss воспроизводит применение split/join и потерю ответа
+UNAVAILABLE; BFF отвечает безопасным 500 после ровно одного RPC, не скрывает правку за повторным 404,
+а следующее чтение возвращает все изменённые записи. PUT/DELETE отметки также не повторяются скрыто.
+Malformed search items/range, change items и nil/пустой идентификатор категории дают 500 с проверкой
+точного ограниченного счётчика на всех трёх уровнях; repeated nil-message protobuf на транспорте
+становится пустым сообщением и проверяется как Category.id/absent. Отсутствие idempotency-key проверено
+у всех новых RPC, а unit фиксирует пять наблюдений длинного дедлайна. Обратный разбор kind строится
+по тому же generated descriptor, что и исходящий code; каждый известный ненулевой code проходит roundtrip.

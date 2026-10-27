@@ -190,9 +190,12 @@ allowlist metadata. Наличие любого фильтра (`from`, `to`, `a
 `amount_from`, `amount_to`, `transfer_mode`, `selection`) выбирает поиск; `before` с фильтрами и
 `all_time` с границами периода отклоняются 400 до RPC. Неизвестные kind/transfer_mode отклоняются 400,
 selection передаётся непрозрачно, selection_name не используется. Семантику времени before, диапазонов,
-поиска и selection проверяет сервис. SearchOperations ограничен10 с/16 МиБ ответа только для этого вызова;
-остальные новые RPC — 5 с/4 МиБ. Идемпотентные присваивания ChangeCategory/Dismiss/Restore включены в
-retry-list клиента; REST retryable всё равно требует отдельного explicit RequestRetryInfo сервиса.
+поиска и selection проверяет сервис. SearchOperations ограничен 10 с/16 МиБ ответа только для этого вызова;
+остальные новые RPC — 5 с/4 МиБ. Для ChangeCategory/Dismiss/Restore BFF не делает скрытых transport-повторов: это локальное исключение BFF
+из общего разрешения grpc-api.md §6/9 для идемпотентных эффектов. При split/join ChangeCategory заменяет
+ID запроса; после применённой правки и потери ответа повтор старого ID вернул бы NOT_FOUND вместо
+изменённых items/replaced_id. Идемпотентность эффекта не обещает стабильный ответ на такой повтор.
+REST retryable остаётся отдельным решением и требует explicit RequestRetryInfo сервиса.
 
 Время возвращается в time_zone сервиса через RFC3339Nano без потери долей секунды. Лента/поиск не
 отдают description/posted_at/note_details/bank_category/mcc/source_name и spoken; детали и результат

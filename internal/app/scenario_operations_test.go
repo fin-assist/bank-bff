@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
 	"github.com/fin-assist/contracts/gen/go/finerr"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -62,7 +65,7 @@ func scenarioOperations(t *testing.T, start starter) {
 			t.Fatal(got)
 		}
 		call := lastCall(t, b, statementdatav1.OperationsService_ListFeed_FullMethodName, access, "")
-		if !reflect.DeepEqual(call.MD.Get("x-read-primary"), []string{"1"}) || len(call.MD.Get("x-user-id")) != 0 || len(call.MD.Get("cookie")) != 0 {
+		if !reflect.DeepEqual(call.MD.Get("x-read-primary"), []string{"1"}) || len(call.MD.Get("x-user-id")) != 0 || len(call.MD.Get("cookie")) != 0 || len(call.MD.Get("idempotency-key")) != 0 {
 			t.Fatal(call.MD)
 		}
 	}
@@ -93,6 +96,10 @@ func scenarioOperations(t *testing.T, start starter) {
 		if strings.HasPrefix(q, "all_time=true") && (!in.AllTime || in.Filter.Kind != 2 || in.Filter.TransferMode != 1) {
 			t.Fatal(in)
 		}
+	}
+	searchCall := lastCall(t, b, statementdatav1.OperationsService_SearchOperations_FullMethodName, access, "")
+	if len(searchCall.MD.Get("idempotency-key")) != 0 || len(searchCall.MD.Get("x-user-id")) != 0 || len(searchCall.MD.Get("cookie")) != 0 || !reflect.DeepEqual(searchCall.MD.Get("x-read-primary"), []string{"1"}) {
+		t.Fatal(searchCall.MD)
 	}
 	// Empty collections keep JSON arrays; no operations or fabricated times are added.
 	b.peers.Operations.Set(func(p *testpeer.Operations) {
@@ -213,7 +220,7 @@ func scenarioOperationMutations(t *testing.T, start starter) {
 	}
 	for _, method := range []string{statementdatav1.OperationsService_GetOperation_FullMethodName, statementdatav1.OperationsService_ChangeCategory_FullMethodName, statementdatav1.CategoriesService_ListCategories_FullMethodName, statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName, statementdatav1.RegularPaymentsService_RestoreRegularPayment_FullMethodName} {
 		call := lastCall(t, b, method, access, "")
-		if len(call.MD.Get("x-user-id")) != 0 {
+		if len(call.MD.Get("x-user-id")) != 0 || len(call.MD.Get("idempotency-key")) != 0 {
 			t.Fatal(call.MD)
 		}
 	}
@@ -331,7 +338,7 @@ func scenarioOperationsErrorsAndGates(t *testing.T, start starter) {
 			t.Fatal(got.StatusCode)
 		}
 		call := b.peers.Calls(op.method)[calls]
-		if len(call.MD.Get("x-user-id")) != 0 {
+		if len(call.MD.Get("x-user-id")) != 0 || len(call.MD.Get("idempotency-key")) != 0 {
 			t.Fatal(call.MD)
 		}
 	}
@@ -424,6 +431,144 @@ func scenarioOperationMalformed(t *testing.T, start starter) {
 		r := b.do(t, request{method: "GET", path: "/v1/operations", route: "/v1/operations", header: auth})
 		if r.StatusCode != 500 {
 			t.Fatal(r.StatusCode, string(r.body))
+		}
+	}
+}
+
+// A lost successful mutation result must stay a transport failure. Retrying the
+// old ID after a split/join hides the applied result behind a new NOT_FOUND.
+func scenarioOperationMutationTransportLoss(t *testing.T, start starter) {
+	b := start(t, nil)
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	for _, joining := range []bool{false, true} {
+		var mu sync.Mutex
+		applied := false
+		changed := []*statementdatav1.Operation{operationMessage(), operationMessage()}
+		changed[0].Id = "updated-expense"
+		changed[1].Id = "updated-income"
+		changed[1].Kind = 2
+		if joining {
+			changed = changed[:1]
+			changed[0].Id = "updated-pair"
+			changed[0].Kind = 3
+		}
+		b.peers.Operations.Set(func(p *testpeer.Operations) {
+			p.ChangeCategoryFunc = func(_ context.Context, in *statementdatav1.ChangeCategoryRequest) (*statementdatav1.ChangeCategoryResponse, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				if in.Id != idemKey {
+					t.Error(in)
+				}
+				if applied {
+					return nil, finerr.NotFound()
+				}
+				applied = true
+				return nil, status.Error(codes.Unavailable, "result lost after committed split or join")
+			}
+			p.ListFeedFunc = func(context.Context, *statementdatav1.ListFeedRequest) (*statementdatav1.ListFeedResponse, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				r := feedMessage()
+				if applied {
+					r.Items = changed
+				}
+				return r, nil
+			}
+		})
+		calls := len(b.peers.Calls(statementdatav1.OperationsService_ChangeCategory_FullMethodName))
+		got := b.do(t, request{method: "PATCH", path: "/v1/operations/" + idemKey, route: "/v1/operations/{id}", body: `{"category_id":"cat_refund","occurred_at":"2026-09-25T00:00:00Z"}`, header: auth})
+		if got.StatusCode != 500 || errorCode(got) != "INTERNAL_ERROR" || len(b.peers.Calls(statementdatav1.OperationsService_ChangeCategory_FullMethodName)) != calls+1 {
+			t.Fatal("mutation was silently replayed after commit", joining, got.StatusCode, string(got.body))
+		}
+		mu.Lock()
+		didApply := applied
+		mu.Unlock()
+		if !didApply {
+			t.Fatal("scenario did not apply effect")
+		}
+		recovered := b.do(t, request{method: "GET", path: "/v1/operations", route: "/v1/operations", header: auth})
+		if recovered.StatusCode != 200 || len(recovered.json["items"].([]any)) != len(changed) {
+			t.Fatal("changed records could not be recovered", recovered.StatusCode, string(recovered.body))
+		}
+		for i, item := range recovered.json["items"].([]any) {
+			if item.(map[string]any)["id"] != changed[i].Id || item.(map[string]any)["id"] == idemKey {
+				t.Fatal(item)
+			}
+		}
+	}
+	// Dismiss/restore follow the same BFF policy: service advice, never a hidden replay.
+	for _, method := range []string{"PUT", "DELETE"} {
+		var calls atomic.Int32
+		b.peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
+			p.DismissRegularPaymentFunc = func(context.Context, *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
+				calls.Add(1)
+				return nil, status.Error(codes.Unavailable, "assignment committed")
+			}
+			p.RestoreRegularPaymentFunc = func(context.Context, *statementdatav1.RestoreRegularPaymentRequest) (*statementdatav1.RestoreRegularPaymentResponse, error) {
+				calls.Add(1)
+				return nil, status.Error(codes.Unavailable, "assignment committed")
+			}
+		})
+		got := b.do(t, request{method: method, path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal", route: "/v1/analytics/regular-payments/{id}/dismissal", header: auth})
+		if got.StatusCode != 500 || calls.Load() != 1 {
+			t.Fatal("assignment was replayed", method, calls.Load(), got.StatusCode)
+		}
+	}
+}
+
+func scenarioOperationOtherMalformed(t *testing.T, start starter) {
+	b := start(t, nil)
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	cases := []struct {
+		name, method, path, route, body, field, code string
+		setup                                        func(*testpeer.Peers)
+	}{
+		{name: "search nil item", method: "GET", path: "/v1/operations?q=x", route: "/v1/operations", field: "Operation.kind", code: "unknown", setup: func(p *testpeer.Peers) {
+			p.Operations.Set(func(o *testpeer.Operations) {
+				o.SearchOperationsFunc = func(context.Context, *statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
+					return &statementdatav1.SearchOperationsResponse{Items: []*statementdatav1.Operation{nil}}, nil
+				}
+			})
+		}},
+		{name: "search invalid item", method: "GET", path: "/v1/operations?q=x", route: "/v1/operations", field: "Operation.status", code: "unknown", setup: func(p *testpeer.Peers) {
+			p.Operations.Set(func(o *testpeer.Operations) {
+				o.SearchOperationsFunc = func(context.Context, *statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
+					item := operationMessage()
+					item.Status = 99
+					return &statementdatav1.SearchOperationsResponse{Items: []*statementdatav1.Operation{item}}, nil
+				}
+			})
+		}},
+		{name: "search invalid range", method: "GET", path: "/v1/operations?q=x", route: "/v1/operations", field: "SearchOperationsResponse.range.end", code: "invalid", setup: func(p *testpeer.Peers) {
+			p.Operations.Set(func(o *testpeer.Operations) {
+				o.SearchOperationsFunc = func(context.Context, *statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
+					return &statementdatav1.SearchOperationsResponse{Range: &commonv1.TimeRange{Start: operationMessage().OccurredAt, End: &timestamppb.Timestamp{Nanos: -1}}}, nil
+				}
+			})
+		}},
+		{name: "change invalid item", method: "PATCH", path: "/v1/operations/" + idemKey, route: "/v1/operations/{id}", body: `{"category_id":"cat","occurred_at":"2026-01-01T00:00:00Z"}`, field: "Operation.kind", code: "unknown", setup: func(p *testpeer.Peers) {
+			p.Operations.Set(func(o *testpeer.Operations) {
+				o.ChangeCategoryFunc = func(context.Context, *statementdatav1.ChangeCategoryRequest) (*statementdatav1.ChangeCategoryResponse, error) {
+					item := operationMessage()
+					item.Kind = 99
+					return &statementdatav1.ChangeCategoryResponse{Items: []*statementdatav1.Operation{item}}, nil
+				}
+			})
+		}},
+		{name: "category nil item on wire", method: "GET", path: "/v1/categories", route: "/v1/categories", field: "Category.id", code: "absent", setup: func(p *testpeer.Peers) {
+			p.Categories.Set(func(o *testpeer.Categories) {
+				o.ListCategoriesFunc = func(context.Context, *statementdatav1.ListCategoriesRequest) (*statementdatav1.ListCategoriesResponse, error) {
+					return &statementdatav1.ListCategoriesResponse{Categories: []*statementdatav1.Category{nil}}, nil
+				}
+			})
+		}},
+	}
+	for _, tc := range cases {
+		tc.setup(b.peers)
+		before := b.analyticsCounter(t, "finassist_untranslated_code_total", tc.field, tc.code)
+		r := b.do(t, request{method: tc.method, path: tc.path, route: tc.route, body: tc.body, header: auth})
+		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || b.analyticsCounter(t, "finassist_untranslated_code_total", tc.field, tc.code) != before+1 {
+			t.Fatal(tc.name, r.StatusCode, string(r.body), tc.field, tc.code)
 		}
 	}
 }

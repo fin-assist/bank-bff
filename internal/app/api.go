@@ -95,6 +95,11 @@ func newPublicAPI(cfg config.Config, log *slog.Logger, reg prometheus.Registerer
 	if api.assistant, err = dial(a.AssistantAddr, "assistant", assistantRetry); err != nil {
 		return nil, err
 	}
+	// Keep BFF mutations out of transport retries. ChangeCategory can commit a
+	// split/join that replaces the request ID, then lose its response: replaying
+	// that ID returns NOT_FOUND and hides the applied records. Assignment safety
+	// of effects (grpc-api.md §6/9) is not a stable result guarantee. REST replay
+	// remains a separate explicit service-advice decision for all three writes.
 	if api.statements, err = dial(a.StatementsAddr, "bank-statement-data", []string{
 		statementdatav1.StatementsService_GetImportConfig_FullMethodName[1:],
 		statementdatav1.StatementsService_ListUploads_FullMethodName[1:],
@@ -102,10 +107,7 @@ func newPublicAPI(cfg config.Config, log *slog.Logger, reg prometheus.Registerer
 		statementdatav1.OperationsService_ListFeed_FullMethodName[1:],
 		statementdatav1.OperationsService_SearchOperations_FullMethodName[1:],
 		statementdatav1.OperationsService_GetOperation_FullMethodName[1:],
-		statementdatav1.OperationsService_ChangeCategory_FullMethodName[1:],
 		statementdatav1.CategoriesService_ListCategories_FullMethodName[1:],
-		statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName[1:],
-		statementdatav1.RegularPaymentsService_RestoreRegularPayment_FullMethodName[1:],
 	}); err != nil {
 		return nil, err
 	}
