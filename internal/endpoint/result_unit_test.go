@@ -166,7 +166,7 @@ func TestUnitCanonicalResultMetricsAreBoundedAndIgnoreUnspecifiedAlias(t *testin
 func TestUnitRouteReplaySafetyDeclarations(t *testing.T) {
 	safe := map[string]bool{
 		"GET /v1/statements/config": true, "GET /v1/statements": true, "GET /v1/statements/{upload_id}/progress": true, "DELETE /v1/statements/{upload_id}": true, "GET /v1/statements/unread-lines": true,
-		"PATCH /v1/profile": true, "DELETE /v1/profile": true,
+		"DELETE /v1/profile":        true,
 		"GET /v1/auth/phone/events": true, "GET /v1/consents/{type}": true, "GET /v1/profile": true,
 		"PUT /v1/profile/assistant-consent": true, "DELETE /v1/profile/assistant-consent": true,
 		"GET /v1/assistant/messages": true, "GET /v1/assistant/messages/{answer_id}/events": true, "GET /v1/assistant/limit": true,

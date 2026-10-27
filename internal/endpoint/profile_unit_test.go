@@ -1,6 +1,8 @@
 package endpoint
 
 import (
+	"context"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -8,8 +10,10 @@ import (
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
 	"github.com/fin-assist/contracts/gen/go/finerr"
+	"github.com/getkin/kin-openapi/openapi3"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/fin-assist/bank-bff/internal/apispec"
 	"github.com/fin-assist/bank-bff/internal/rest"
 )
 
@@ -175,5 +179,38 @@ func TestUnitProfileMutations(t *testing.T) {
 		if d <= 0 || d > UnaryDeadline {
 			t.Fatal("unbounded profile mutation", d)
 		}
+	}
+}
+
+func TestUnitProfileThemeMapMatchesContract(t *testing.T) {
+	document, err := openapi3.NewLoader().LoadFromData(apispec.Document())
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := document.Components.Schemas["ThemeUpdate"].Value.Enum
+	if len(values) != len(profileThemes) {
+		t.Fatalf("theme map differs from contract: enum=%v map=%v", values, profileThemes)
+	}
+	for _, value := range values {
+		name, ok := value.(string)
+		theme, known := profileThemes[name]
+		if !ok || !known || theme == userv1.Theme_THEME_UNSPECIFIED {
+			t.Fatalf("theme %v has no valid protobuf mapping", value)
+		}
+	}
+}
+
+func TestUnitProfileThemeUnknownFailsClosedBeforeRPC(t *testing.T) {
+	calls := 0
+	f := &fakes{t: t, update: func(*userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error) {
+		calls++
+		return &userv1.UpdateProfileResponse{}, nil
+	}}
+	response := httptest.NewRecorder()
+	// A direct handler call represents schema drift: it bypasses the current closed
+	// enum and proves a newly accepted theme cannot silently become UNSPECIFIED.
+	(Deps{Profile: f}).updateProfile(&rest.Call{W: response, R: httptest.NewRequest("PATCH", "/v1/profile", nil).WithContext(context.Background()), Body: []byte(`{"theme":"sepia"}`)})
+	if response.Code != 400 || calls != 0 {
+		t.Fatal("unknown theme was forwarded", response.Code, calls, response.Body.String())
 	}
 }

@@ -80,6 +80,10 @@ func (d Deps) revokeConsent(c *rest.Call) {
 	rest.WriteNoContent(c.W)
 }
 
+var profileThemes = map[string]userv1.Theme{
+	"system": userv1.Theme_THEME_SYSTEM, "light": userv1.Theme_THEME_LIGHT, "dark": userv1.Theme_THEME_DARK,
+}
+
 func (d Deps) updateProfile(c *rest.Call) {
 	var in struct {
 		Theme    *string `json:"theme"`
@@ -90,10 +94,12 @@ func (d Deps) updateProfile(c *rest.Call) {
 	}
 	request := &userv1.UpdateProfileRequest{Timezone: in.Timezone}
 	if in.Theme != nil {
-		// The OpenAPI closed request enum was validated before this conversion.
-		request.Theme = map[string]userv1.Theme{
-			"system": userv1.Theme_THEME_SYSTEM, "light": userv1.Theme_THEME_LIGHT, "dark": userv1.Theme_THEME_DARK,
-		}[*in.Theme].Enum()
+		theme, known := profileThemes[*in.Theme]
+		if !known {
+			rest.Validation(rest.Detail{Field: "theme", Code: rest.DetailInvalidFormat, Message: "has invalid format"}).Write(c.W)
+			return
+		}
+		request.Theme = theme.Enum()
 	}
 	ctx, cancel := unary(c)
 	defer cancel()

@@ -79,8 +79,8 @@ func scenarioGates(t *testing.T, start starter) {
 	}
 	got := b.raw(t, request{method: "PUT", path: "/v1/profile", body: `{"theme":"dark"}`, header: base(map[string]string{"Authorization": "Bearer " + access})})
 	resp := got.Response
-	if resp.StatusCode != 404 {
-		t.Fatalf("an operation outside FIN-268 is not served: %d", resp.StatusCode)
+	if resp.StatusCode != 404 || !strings.Contains(string(got.body), `"code":"NOT_FOUND"`) {
+		t.Fatalf("a method absent from the contract must be JSON NOT_FOUND: %d %s", resp.StatusCode, got.body)
 	}
 	for _, path := range []string{"/", "/healthz", "/readyz", "/metrics"} {
 		if got := b.raw(t, request{method: "GET", path: path}); got.StatusCode != 404 {

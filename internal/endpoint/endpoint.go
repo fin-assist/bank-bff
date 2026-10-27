@@ -123,7 +123,8 @@ func (d Deps) Routes() []rest.Route {
 		{Method: http.MethodPost, Path: "/v1/auth/logout", Protected: rest.Always, Handle: d.logout},
 		{Method: http.MethodGet, Path: "/v1/consents/{type}", Protected: assistantDocument, ReplaySafe: true, Handle: d.consentDocument},
 		{Method: http.MethodGet, Path: "/v1/profile", Protected: rest.Always, ReplaySafe: true, Handle: d.profile},
-		{Method: http.MethodPatch, Path: "/v1/profile", Protected: rest.Always, ReplaySafe: true, Handle: d.updateProfile},
+		// docs/api.md 2.2 does not declare safety of replaying the whole PATCH.
+		{Method: http.MethodPatch, Path: "/v1/profile", Protected: rest.Always, Handle: d.updateProfile},
 		{Method: http.MethodDelete, Path: "/v1/profile", Protected: rest.Always, ReplaySafe: true, Handle: d.deleteAccount},
 		{Method: http.MethodPut, Path: "/v1/profile/assistant-consent", Protected: rest.Always, ReplaySafe: true, Handle: d.grantConsent},
 		{Method: http.MethodDelete, Path: "/v1/profile/assistant-consent", Protected: rest.Always, ReplaySafe: true, Handle: d.revokeConsent},

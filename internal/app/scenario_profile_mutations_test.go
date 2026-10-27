@@ -113,14 +113,14 @@ func scenarioProfileDeletion(t *testing.T, start starter) {
 			profileDeadline(t, ctx)
 			md, _ := metadata.FromIncomingContext(ctx)
 			mu.Lock()
-			removed[md.Get("authorization")[0]] = true
+			removed[strings.Join(md.Get("authorization"), "")] = true
 			mu.Unlock()
 			return &userv1.DeleteAccountResponse{}, nil
 		}
 		p.GetFunc = func(ctx context.Context, _ *userv1.GetProfileRequest) (*userv1.GetProfileResponse, error) {
 			md, _ := metadata.FromIncomingContext(ctx)
 			mu.Lock()
-			deleted := removed[md.Get("authorization")[0]]
+			deleted := removed[strings.Join(md.Get("authorization"), "")]
 			mu.Unlock()
 			if deleted {
 				return nil, finerr.TokenRevoked()

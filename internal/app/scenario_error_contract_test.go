@@ -82,7 +82,7 @@ func scenarioRequestRetryAdvice(t *testing.T, start starter) {
 					req.header = base(map[string]string{"Authorization": auth["Authorization"], "Idempotency-Key": idemKey})
 				}
 				got := b.do(t, req)
-				want := tc.want && req.method != "POST"
+				want := tc.want && req.method != "POST" && req.method != "PATCH"
 				if got.StatusCode != 429 || errorCode(got) != "RATE_LIMITED" || got.json["error"].(map[string]any)["retryable"] != want || got.Header.Get("Retry-After") == "" {
 					t.Fatalf("%s %s: %d %s, want retryable=%v", req.method, req.path, got.StatusCode, got.body, want)
 				}
