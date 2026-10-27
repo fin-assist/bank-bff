@@ -145,3 +145,7 @@ Their transport calls are never automatically retried by BFF: an applied split/j
 ID and a lost response must not turn into NOT_FOUND from a hidden replay. This BFF exception preserves
 results even though grpc-api.md §6/9 permits retries of construction-idempotent effects in general.
 No financial calculation, pairing, category choice or tenant authorization moves from the service to BFF.
+
+## Assistant source freshness (FIN-368)
+
+FIN-368: source conversion preserves open `unverified`/`time_zone` codes and ready Russian fallback text in history, snapshots and source events. Internal revision vectors never become REST fields.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- FIN-368: BFF передаёт открытые коды `unverified` и `time_zone` в `changed_since` и готовые тексты «Актуальность данных этого ответа не подтверждена» / «Обновились настройки часового пояса» в истории, reconnect-snapshot и SSE source; сохранён fallback для неизвестных enum. Технические версии данных в REST не добавляются.
+
 - FIN-359: BFF не повторяет transport-мутации после потери ответа применённого split/join; открытый kind разбирается по generated descriptor, неполные категории отклоняются. Добавлены регрессии потери ответа, malformed search/change/categories, точных diagnostic counters, metadata и невырожденного deadline guard.
 
 - FIN-359: шесть REST-операций ленты/поиска, деталей/смены категории, справочника и «Не подписка» через bank-statement-data. Точные моменты и готовые поля сервисов, проверка фильтров, search10s/16 МиБ только для поиска, verified identity и безопасные повторы; unit и HTTP→gRPC integration/API.
