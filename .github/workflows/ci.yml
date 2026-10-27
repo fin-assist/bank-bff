@@ -185,6 +185,7 @@ jobs:
           for path in /metrics /healthz /readyz /v1/profile; do
             test "$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' "http://$public$path")" = 404
           done
+          docker logs bank-bff-smoke 2>&1 | grep -qF "$GITHUB_SHA"
           docker stop --time 5 bank-bff-smoke
           test "$(docker inspect --format '{{.State.ExitCode}}' bank-bff-smoke)" = 0
       - name: Extract stage binary from the tested image
