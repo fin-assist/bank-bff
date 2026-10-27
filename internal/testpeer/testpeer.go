@@ -122,13 +122,16 @@ type Call struct {
 // Peers is one in-process gRPC server playing user, assistant, statements and analytics. Handlers are the
 // fake behaviour; unset methods answer UNIMPLEMENTED. Peers is safe for concurrent use.
 type Peers struct {
-	Auth       *Auth
-	Consents   *Consents
-	Profile    *Profile
-	Assistant  *Assistant
-	Statements *Statements
-	Analytics  *Analytics
-	Keys       *Keys
+	Auth            *Auth
+	Consents        *Consents
+	Profile         *Profile
+	Assistant       *Assistant
+	Statements      *Statements
+	Analytics       *Analytics
+	Operations      *Operations
+	Categories      *Categories
+	RegularPayments *RegularPayments
+	Keys            *Keys
 
 	listener *bufconn.Listener
 	server   *grpc.Server
@@ -148,7 +151,7 @@ func Start(t testing.TB, keys *Keys, stage StageFiles) *Peers {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &Peers{Auth: &Auth{}, Consents: &Consents{}, Profile: &Profile{}, Assistant: &Assistant{}, Statements: &Statements{}, Analytics: &Analytics{}, Keys: keys,
+	p := &Peers{Auth: &Auth{}, Consents: &Consents{}, Profile: &Profile{}, Assistant: &Assistant{}, Statements: &Statements{}, Analytics: &Analytics{}, Operations: &Operations{}, Categories: &Categories{}, RegularPayments: &RegularPayments{}, Keys: keys,
 		listener: bufconn.Listen(1 << 20), verifier: verifier}
 	p.server = grpc.NewServer(grpc.ChainUnaryInterceptor(p.unary), grpc.ChainStreamInterceptor(p.stream))
 	userv1.RegisterUserInternalServiceServer(p.server, signingKeys{keys: keys, peers: p})
@@ -158,6 +161,9 @@ func Start(t testing.TB, keys *Keys, stage StageFiles) *Peers {
 	assistantv1.RegisterAssistantServiceServer(p.server, p.Assistant)
 	statementdatav1.RegisterStatementsServiceServer(p.server, p.Statements)
 	analyticsv1.RegisterAnalyticsServiceServer(p.server, p.Analytics)
+	statementdatav1.RegisterOperationsServiceServer(p.server, p.Operations)
+	statementdatav1.RegisterCategoriesServiceServer(p.server, p.Categories)
+	statementdatav1.RegisterRegularPaymentsServiceServer(p.server, p.RegularPayments)
 	go func() { _ = p.server.Serve(p.listener) }()
 	t.Cleanup(p.server.Stop)
 	return p

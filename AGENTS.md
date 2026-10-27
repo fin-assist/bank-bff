@@ -4,7 +4,8 @@
 `fin-assist/go-service-template` main 6ea35ce (FIN-246) in FIN-261. Read README.md first.
 FIN-268 (FIN-331) serves 14 public REST/SSE operations of auth, consents, profile reads/assistant
 consent and the assistant; FIN-342 adds six import operations, FIN-361 adds PATCH/DELETE profile
-and FIN-360 adds analytics/period reads (24 operations total, docs/server.md). Every other contract operation answers 404 until its task.
+and FIN-360 adds analytics/period reads. FIN-359 completes operations, categories and regular-payment dismissals
+(30 operations total, docs/server.md). Unknown paths/methods answer 404.
 Do not invent REST fields, RPCs or error codes.
 Contracts live in `fin-assist/contracts`: docs/api.md, openapi/openapi.yaml, docs/grpc-api.md.
 The owner's latest decision and contracts take precedence over copied template assumptions.
@@ -16,7 +17,7 @@ The owner's latest decision and contracts take precedence over copied template a
   api.go builds the public API (embedded contract, go-identity Assembly, go-grpc peers) before bind.
 - internal/rest: request ID, gates (MAINTENANCE, X-Client-Version), auth, body limit and kin-openapi
   validation, finerr.ToREST translation and whole-request retry safety, SSE pump/limits, metrics and access log.
-- internal/endpoint: the 24 operations, REST <-> gRPC conversion; internal/catalog: user_message and
+- internal/endpoint: the 30 operations, REST <-> gRPC conversion; internal/catalog: user_message and
   severity texts (FIN-225); internal/apispec: embedded openapi.yaml copy with its contracts commit.
 - internal/testpeer: test infrastructure only — bufconn fakes of user/assistant/statements/analytics, keys, contract checks.
 - internal/config: all environment settings in Vars; docs/config.md table is checked by tests.
@@ -115,7 +116,7 @@ Security: authorization boundaries, private operational listener, no data leakag
 shutdown, startup failure cleanup, trusted metadata, safe CI and fork permissions.
 Tests: meaningful behavior coverage at all three levels; real HTTP API and transport dependencies;
 negative startup/shutdown scenarios; unchanged strict guards and independent total80.
-Only the 24 FIN-268/FIN-342/FIN-361/FIN-360 operations exist; do not require absent handlers solely to increase coverage, and do
+All 30 FIN-268/FIN-342/FIN-361/FIN-360/FIN-359 contract operations exist; do
 not treat passing tests as implementing unimplemented contract operations. Each served operation needs
 API tests for success, its declared errors, token, Idempotency-Key, schema, client version and SSE.
 
@@ -131,3 +132,16 @@ BFF forwards `date` as `period_key`, `supports` and `exp`. Unknown request perio
 `type@positive-int32`/`key:variant` syntax fail with 400. Unknown primitive/status/reason/action strings and
 Struct data pass through unchanged; do not inspect or rewrite nested data. Top-level empty lock text gets
 «Пока недоступно» and a counter; empty currency gets RUB only when has_data=true (FIN-98).
+
+## Operations (FIN-359)
+
+Operations/Categories/RegularPayments clients share STATEMENTS_GRPC_ADDR with imports. A known filter's
+presence selects SearchOperations; before+filter and all_time+from/to fail before RPC. Search alone has a
+10s deadline and a 16 MiB receive limit; other new calls keep 5 s/default 4 MiB. Required unknown operation
+kind/status or invalid typed moments fail closed with bounded diagnostics. List projections omit details
+and spoken account fields; details keep service text, currencies and exact RFC3339Nano timestamps.
+PATCH category and PUT/DELETE dismissal are assignments, replay-safe only with explicit service advice.
+Their transport calls are never automatically retried by BFF: an applied split/join can replace the request
+ID and a lost response must not turn into NOT_FOUND from a hidden replay. This BFF exception preserves
+results even though grpc-api.md §6/9 permits retries of construction-idempotent effects in general.
+No financial calculation, pairing, category choice or tenant authorization moves from the service to BFF.
