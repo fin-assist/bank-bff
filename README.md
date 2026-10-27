@@ -37,3 +37,7 @@ make cover  # >=80% всего production-модуля отдельно unit/int
 Ревью Claude можно запускать после появления `.github/workflows/claude.yml` в main и настройки секрета владельцем. Настройка Renovate/controller, секретов и защит не входит в FIN-261; автоматически включённой политики обновлений каркас не заявляет.
 
 Для Python regression-тестов workflow нужен Node.js 20+ (`node` в PATH). Проверяется реальный read-only JS gate: fork/удалённый head/чужая base/закрытый PR/ошибка API не могут включить write-enabled job; отдельные issues не запускают ревью.
+
+## Артефакты stage
+
+[Получение и проверка бинарей](docs/stage-artifacts.md) (FIN-148): CI извлекает бинарь из проверенного образа, сохраняет SHA и контрольную сумму; фактическая выкладка остаётся FIN-149.

@@ -26,6 +26,8 @@
 - FIN-290 (FIN-331): `make test-names` проверяет и `Fuzz…`, отклоняет `Example…`; collectors выбирают Fuzz-цели своего уровня.
 - FIN-261: Go-каркас stateless HTTP BFF из go-service-template: два изолированных listeners, конфигурация, логи, health/readiness/метрики, ограниченный shutdown, Docker/systemd и три уровня автотестов. Бизнес-REST/SSE остаются в отдельных задачах.
 
+- FIN-148: CI сохраняет stage-бинарь из проверенного образа с SHA, manifest и контрольной суммой.
+
 ### Исправлено
 
 - FIN-286: пример systemd-юнита для стенда привязывает публичный и operational listeners к `127.0.0.1`: метрики и HTTP без TLS не публикуются на внешних интерфейсах VPS; юнит дополнительно разрешает только loopback-трафик (`IPAddressAllow=localhost`, `IPAddressDeny=any`), env-файл стенда адреса listeners не задаёт.
