@@ -1,4 +1,4 @@
-# Common commands; CI runs the same steps (.github/workflows/ci.yml).
+# Local commands; pinned shared workflows select the matching CI steps.
 GO_TEST_COVERAGE_VERSION := v2.20.1
 COVERAGE := GOTOOLCHAIN=auto go run github.com/vladopajic/go-test-coverage/v2@$(GO_TEST_COVERAGE_VERSION)
 SHELL := /bin/bash
@@ -14,7 +14,7 @@ test: test-names ## go.mod tidy, unit/integration/API and script tests, changelo
 	go mod tidy -diff
 	go vet ./...
 	go test -race -count=1 -timeout=8m ./...
-	python3 -m unittest discover -s scripts -p 'test_*.py'
+	python3 -B -m unittest discover -s scripts -p 'test_*.py'
 	python3 scripts/changelog.py check
 
 release-check: ## VERSION=vX.Y.Z: validate the CHANGELOG section before tagging
@@ -84,5 +84,5 @@ BASE_REF ?= origin/main
 lint-config: ## render the declared shared linter profile without running Go
 	python3 scripts/common_ci.py render
 
-lint-migrations: ## immutable SQL and Squawk on added up migrations
+lint-migrations: ## shared facade; no-op without migrations in stateless BFF
 	@common=$$(python3 scripts/common_ci.py) && python3 -B "$$common/lint.py" migrations --root "$(CURDIR)" --base "$(BASE_REF)"

@@ -24,7 +24,7 @@ The owner's latest decision and contracts take precedence over copied template a
 - internal/ops: private health/readiness and Prometheus Go/process metrics.
 - docs/server.md and docs/testing.md: lifecycle and test scope.
 - Dockerfile, compose.yaml, deploy/systemd/bank-bff.service: packaging and stand example.
-- Makefile, .github/workflows/ci.yml, .golangci.yml: checks.
+- Makefile, .github/workflows/ci.yml, .finassist-ci.json: checks and pinned shared lint profile.
 - CHANGELOG.md, docs/releasing.md, .github/workflows/release.yml, scripts/changelog.py: service releases.
 
 Keep README, AGENTS and docs current in the same PR. Code, comments and commits are English;
@@ -161,4 +161,4 @@ FIN-339 canonical OpenAPI adoption validates examples/defaults and rejects unsup
 
 Shared lint and script tests require Python 3.11+ with PyYAML.
 
-`.finassist-ci.json` pins `fin-assist/go-service-template` by full SHA and declares the lint profile/overrides. CI workflow calls use the same SHA. `make lint`, `make fmt`, `make lint-config` and `make lint-migrations BASE_REF=origin/main` resolve that source with `scripts/common_ci.py`; generated linter configs live in ignored `.finassist-ci/generated/`. Do not restore copied root linter configs. Preserve coverage/test/API/security gates and the bank-statement-data-only smallint exception. Update and rollback all pins in one PR. Details: https://github.com/fin-assist/go-service-template/blob/main/docs/shared-go-ci.md.
+`.finassist-ci.json` pins `fin-assist/go-service-template` by full SHA and declares the lint profile/overrides. CI workflow calls use the same SHA. `make lint`, `make fmt`, `make lint-config` and `make lint-migrations BASE_REF=origin/main` resolve that source with `scripts/common_ci.py`; generated linter configs live in ignored `.finassist-ci/generated/`. Do not restore copied root linter configs. Preserve coverage/test/API/security gates. bank-bff declares squawk_smallint: false; the smallint exception belongs to bank-statement-data only. Update and rollback all pins in one PR. Details: https://github.com/fin-assist/go-service-template/blob/main/docs/shared-go-ci.md.
