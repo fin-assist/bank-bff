@@ -156,3 +156,9 @@ FIN-368: source conversion preserves open `unverified`/`time_zone` codes and rea
 An unmapped gRPC freshness enum also produces `unverified` with its ready text and the bounded translation metric, including mixed known/unknown reasons. Empty `changed_since` is reserved for confirmed equality. The new full public source/encoding flows are API-only; component integration composes neighbor gRPC/source mapping or HTTP/JWT/rest validation with a probe RPC, without the full public API assembly.
 
 FIN-339 canonical OpenAPI adoption validates examples/defaults and rejects unsupported, empty or repeated Content-Encoding before JSON body reads on the six agreed operations only. Invalid encoding requests connection close and skips the application drain; auth/gates and other body/upload policies retain their order.
+
+## Shared Go CI (FIN-372)
+
+Shared lint and script tests require Python 3.11+ with PyYAML.
+
+`.finassist-ci.json` pins `fin-assist/go-service-template` by full SHA and declares the lint profile/overrides. CI workflow calls use the same SHA. `make lint`, `make fmt`, `make lint-config` and `make lint-migrations BASE_REF=origin/main` resolve that source with `scripts/common_ci.py`; generated linter configs live in ignored `.finassist-ci/generated/`. Do not restore copied root linter configs. Preserve coverage/test/API/security gates and the bank-statement-data-only smallint exception. Update and rollback all pins in one PR. Details: https://github.com/fin-assist/go-service-template/blob/main/docs/shared-go-ci.md.
