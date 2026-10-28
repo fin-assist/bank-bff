@@ -144,17 +144,35 @@ const maxDrain = 256 << 10
 // (ContentLength -1) is discarded within the bound.
 func drainBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := &drainingBody{ReadCloser: r.Body}
+		r.Body = body
 		next.ServeHTTP(w, r)
-		if r.ContentLength <= maxDrain {
+		if !body.refusedUnread && r.ContentLength <= maxDrain {
 			_, _ = io.CopyN(io.Discard, r.Body, maxDrain)
 		}
 	})
+}
+
+// drainingBody shares the early-refusal decision across middleware request copies.
+// Invalid Content-Encoding must not be consumed by the application drain.
+// Connection: close prevents reuse of the HTTP/1 connection with an unread body.
+type drainingBody struct {
+	io.ReadCloser
+	refusedUnread bool
 }
 
 func routeHandler(cfg Config, route Route, op apispec.Operation) http.Handler {
 	checked := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if rec, ok := w.(*recorder); ok {
 			rec.route = route.Path
+		}
+		if refusal := jsonEncodingRefusal(r, op); refusal != nil {
+			if body, ok := r.Body.(*drainingBody); ok {
+				body.refusedUnread = true
+			}
+			w.Header().Set("Connection", "close")
+			refusal.Write(w)
+			return
 		}
 		path := pathValues(route.Path, r)
 		input := route.Input

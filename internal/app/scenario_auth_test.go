@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -152,21 +151,15 @@ func scenarioStartPhone(t *testing.T, start starter) {
 }
 
 // scenarioRequestTooLarge: a body over the 64 KiB budget is refused before the
-// service with 413 REQUEST_TOO_LARGE of FIN-339. The embedded contract (contracts
-// 8b3b1b6) does not declare this 413 yet; the mismatch is asserted, not hidden.
+// service with the contract's 413 REQUEST_TOO_LARGE on all six JSON operations.
 func scenarioRequestTooLarge(t *testing.T, start starter) {
 	b := start(t, nil)
-	for _, route := range []string{"/v1/auth/phone", "/v1/auth/register", "/v1/auth/token", "/v1/assistant/messages"} {
-		big := request{method: "POST", path: route, route: route, body: `{"phone":"` + strings.Repeat("1", 70000) + `"}`,
+	for _, route := range [][2]string{{"POST", "/v1/auth/phone"}, {"POST", "/v1/auth/register"}, {"POST", "/v1/auth/token"}, {"POST", "/v1/auth/logout"}, {"PUT", "/v1/profile/assistant-consent"}, {"POST", "/v1/assistant/messages"}} {
+		big := request{method: route[0], path: route[1], route: route[1], body: `{"phone":"` + strings.Repeat("1", 70000) + `"}`,
 			header: base(map[string]string{"Idempotency-Key": idemKey, "Authorization": "Bearer " + b.keys.Access("u1")})}
-		got := b.raw(t, big)
-		resp, body := got.Response, got.body
-		req, _ := http.NewRequest(big.method, "http://"+b.public+route, nil)
-		if resp.StatusCode != 413 || !strings.Contains(string(body), `"code":"REQUEST_TOO_LARGE"`) {
-			t.Fatalf("%s: %d %s", route, resp.StatusCode, body)
-		}
-		if err := b.contract.Check(t, big.method, route, req, resp, body); err == nil {
-			t.Fatalf("%s: the embedded contract now declares 413; drop this FIN-339 note", route)
+		got := b.do(t, big)
+		if got.StatusCode != 413 || errorCode(got) != "REQUEST_TOO_LARGE" {
+			t.Fatalf("%v: %d %s", route, got.StatusCode, got.body)
 		}
 	}
 	// The token is checked before the body: without Authorization an oversized body and

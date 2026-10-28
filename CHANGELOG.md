@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- FIN-368: неизвестная gRPC-причина актуальности получает `unverified` с готовым текстом и прежней метрикой; пустой changed_since зарезервирован для подтверждённого равенства. Публичные source/encoding сценарии остались API-only, отдельные integration проверяют mapper+gRPC и rest+HTTP/JWT/gRPC компоненты.
+
+- FIN-368 / FIN-339: contracts/gen/go v0.6.0 и точная встроенная OpenAPI-копия merged `1c624f5`. Сопутствующая совместимость шести JSON-операций: все Content-Encoding проверяются до чтения/size/decode, недопустимое значение — 400 без чтения тела приложением, его drain и RPC; полный startup Validate включает исправленные примеры и defaults. Auth/idempotency, bodyless и upload политики сохраняются.
+
+- FIN-368: BFF передаёт открытые коды `unverified` и `time_zone` в `changed_since` и готовые тексты «Актуальность данных этого ответа не подтверждена» / «Обновились настройки часового пояса» в истории, reconnect-snapshot и SSE source; сохранён fallback для неизвестных enum. Технические версии данных в REST не добавляются.
+
 - FIN-359: BFF не повторяет transport-мутации после потери ответа применённого split/join; открытый kind разбирается по generated descriptor, неполные категории отклоняются. Добавлены регрессии потери ответа, malformed search/change/categories, точных diagnostic counters, metadata и невырожденного deadline guard.
 
 - FIN-359: шесть REST-операций ленты/поиска, деталей/смены категории, справочника и «Не подписка» через bank-statement-data. Точные моменты и готовые поля сервисов, проверка фильтров, search10s/16 МиБ только для поиска, verified identity и безопасные повторы; unit и HTTP→gRPC integration/API.

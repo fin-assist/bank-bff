@@ -60,12 +60,32 @@ info:
 
     **Ошибки:** всегда один объект `error` (см. `ErrorResponse`). Порядок проверки:
     503 (`MAINTENANCE`) → 400 `CLIENT_VERSION_UNSUPPORTED` → 401 (заголовок `Authorization`) → 400/413 проверки
-    `bank-bff` (нет `Idempotency-Key`, тело не по схеме, `Content-Length`) → ключ идемпотентности (сохранённый ответ
+    `bank-bff` (нет `Idempotency-Key`, тело не по схеме, `Content-Length` больше лимита и ограниченное чтение; у шести JSON-операций — по правилам ниже) → ключ идемпотентности (сохранённый ответ
     или 409) → 429 → 401 (токены запроса, которые проверяет сервис: `registration_token`, `refresh_token` в теле,
     `X-Verification-Token` в заголовке; у потока статуса верификации ключа нет — шаг сразу после лимитов) → 400 →
     404 → 403 → 413/422. У `POST /v1/statements` 413 `FILE_TOO_LARGE` сервиса — до ключа (под ключом не
     сохраняется), остальные ответы сверяют ключ после приёма всего файла.
     503 и 400 `CLIENT_VERSION_UNSUPPORTED` возможны у любой операции.
+
+    **Размер JSON-запроса (FIN-339):** только startPhoneVerification, register, refreshTokens, logout,
+    grantAssistantConsent и askAssistant имеют x-min-request-body-bytes: 65536. Тело до 65 536 байт
+    включительно поддерживается всегда; предел развёртывания может быть выше, но не ниже. Считаются все
+    байты UTF-8 JSON, включая пробелы/escape, независимо от лимитов полей. Превышение фактического предела
+    по Content-Length или ограниченному чтению потока без него — 413 REQUEST_TOO_LARGE до сервиса/ключа,
+    без сохранения отказа и с retryable:false. Исправленное тело — новое действие (новый ключ, если операция требует Idempotency-Key), не автоматический retry.
+    У этих шести операций Content-Encoding отсутствует либо содержит один identity (без учёта регистра);
+    все другие значения, включая gzip/br, список или несколько Content-Encoding, — 400 VALIDATION_ERROR
+    после техработ/версии/авторизации, но до чтения тела/размера/распаковки/сервиса, не новый 415.
+    HTTP-парсер нормализует OWS; пустое значение не равно отсутствию.
+    BFF и инфраструктура перед ним не распаковывают такое тело: wire-байты совпадают с байтами JSON.
+    Остальные восемь операций набора FIN-268 (включая retryAnswer) принимают только фактические 0 байт:
+    Content-Length:0, пустой chunked и Content-Type:application/json без байтов допустимы; отсутствие
+    Content-Type тоже. От 1 байта, включая {} или пробел, — 400 VALIDATION_ERROR после чтения не более
+    одного байта для обнаружения тела; заголовки сами по себе не означают тело, новый 413 не вводится.
+    У прочих операций с телом прежние Content-Length/ограниченное чтение/413 до валидации и сервиса сохраняются;
+    для остальных JSON-операций код и байтовый бюджет этого отказа контракт пока не определяет —
+    последующее согласование FIN-225 вне реализации FIN-268. REQUEST_TOO_LARGE/минимум65536 на них не распространяются.
+    Файловый FILE_TOO_LARGE и его лимит остаются прежними (docs/api.md, «Размер JSON-запроса»).
 
     **SSE:** первым событием — текущее состояние целиком; после терминального события поток закрывается;
     heartbeat `: ping` каждые 15 с; ошибки до начала потока — обычный HTTP-ответ с JSON. Неизвестный тип
@@ -125,6 +145,7 @@ paths:
       tags:
       - auth
       operationId: startPhoneVerification
+      x-min-request-body-bytes: 65536
       summary: Начать верификацию телефона
       description: |
         Создаёт заявку на подтверждение номера обратным звонком. До подтверждения API не сообщает,
@@ -161,6 +182,7 @@ paths:
         полученном без своей действующей заявки.
       security: []
       parameters:
+      - $ref: '#/components/parameters/ContentEncodingIdentity'
       - $ref: '#/components/parameters/IdempotencyKey'
       - $ref: '#/components/parameters/XRequestId'
       - $ref: '#/components/parameters/XClientVersion'
@@ -184,6 +206,8 @@ paths:
                 callback_number: '+74951234567'
                 expires_at: '2026-10-04T22:17:00+03:00'
                 expires_in: 300
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
         '400':
           $ref: '#/components/responses/BadRequest'
         '409':
@@ -254,6 +278,7 @@ paths:
       tags:
       - auth
       operationId: register
+      x-min-request-body-bytes: 65536
       summary: Регистрация нового пользователя
       description: |
         Вызывается с экрана согласия на обработку ПДн после подтверждения нового номера.
@@ -263,6 +288,7 @@ paths:
         429 `RATE_LIMITED`.
       security: []
       parameters:
+      - $ref: '#/components/parameters/ContentEncodingIdentity'
       - $ref: '#/components/parameters/IdempotencyKey'
       - $ref: '#/components/parameters/XRequestId'
       - $ref: '#/components/parameters/XClientVersion'
@@ -288,6 +314,8 @@ paths:
                 access_token: eyJ...
                 refresh_token: rt_...
                 user_id: 01a107db-ae80-7b07-b8a1-a8c8486e2532
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -309,6 +337,7 @@ paths:
       tags:
       - auth
       operationId: refreshTokens
+      x-min-request-body-bytes: 65536
       summary: Обновить токены
       description: |
         Ротация refresh-токена. Повторное использование старого refresh отзывает всю цепочку сессии —
@@ -317,6 +346,7 @@ paths:
         `RATE_LIMITED`.
       security: []
       parameters:
+      - $ref: '#/components/parameters/ContentEncodingIdentity'
       - $ref: '#/components/parameters/IdempotencyKey'
       - $ref: '#/components/parameters/XRequestId'
       - $ref: '#/components/parameters/XClientVersion'
@@ -336,6 +366,8 @@ paths:
               example:
                 access_token: eyJ...
                 refresh_token: rt_new_...
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -353,9 +385,11 @@ paths:
       tags:
       - auth
       operationId: logout
+      x-min-request-body-bytes: 65536
       summary: Выход
       description: Завершает сессию. Повтор возвращает `204`.
       parameters:
+      - $ref: '#/components/parameters/ContentEncodingIdentity'
       - $ref: '#/components/parameters/XRequestId'
       - $ref: '#/components/parameters/XClientVersion'
       requestBody:
@@ -367,6 +401,8 @@ paths:
       responses:
         '204':
           description: Сессия завершена
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -527,9 +563,11 @@ paths:
       tags:
       - profile
       operationId: grantAssistantConsent
+      x-min-request-body-bytes: 65536
       summary: Дать согласие помощнику
       description: Только с экрана согласия после галочки. Повтор с той же версией ничего не меняет.
       parameters:
+      - $ref: '#/components/parameters/ContentEncodingIdentity'
       - $ref: '#/components/parameters/XRequestId'
       - $ref: '#/components/parameters/XClientVersion'
       requestBody:
@@ -547,6 +585,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Profile'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1598,6 +1638,9 @@ paths:
       summary: История сообщений
       description: |
         Один непрерывный диалог, старые сообщения первыми. Ответ, заменённый повтором, в истории не возвращается.
+        changed_since проверяется по текущим ревизиям на момент запроса. При временной транспортной недоступности
+        проверки сохранённые ответы доступны с unverified, baseline не меняется. Ошибки доступа, неверный ответ
+        сервиса версии и отмена всего запроса не подавляются (docs/grpc-api.md, FIN-367).
       parameters:
       - name: limit
         in: query
@@ -1671,6 +1714,7 @@ paths:
                       to: '2026-10-01T00:00:00+03:00'
                     transfer_mode: with
                     changed_since: []
+                    changed_since_text: null
                   created_at: '2026-10-04T22:10:05+03:00'
                 has_older: true
         '400':
@@ -1687,6 +1731,7 @@ paths:
       tags:
       - assistant
       operationId: askAssistant
+      x-min-request-body-bytes: 65536
       summary: Задать вопрос
       description: |
         Создаёт вопрос и запускает генерацию ответа на сервере; ответ читается потоком `streamAnswer`.
@@ -1707,6 +1752,7 @@ paths:
         остаток доступны. Повтор с тем же ключом после снятия блокировки проверяется заново; клиент не повторяет
         отказ автоматически в цикле. Полные правила и примеры — docs/api.md, раздел 7.
       parameters:
+      - $ref: '#/components/parameters/ContentEncodingIdentity'
       - $ref: '#/components/parameters/IdempotencyKey'
       - $ref: '#/components/parameters/XRequestId'
       - $ref: '#/components/parameters/XClientVersion'
@@ -1730,10 +1776,13 @@ paths:
                 question:
                   id: 01a10852-b340-77c5-9ba3-bb9964a666d0
                   role: user
+                  currency: RUB
                   text: Сколько я трачу на Самокат?
                   created_at: '2026-10-04T22:10:00+03:00'
                 answer_id: 01a10852-b341-7a10-8f3e-6c2d9b4a1e07
                 remaining_limit: 4
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1914,6 +1963,20 @@ components:
       name: X-Verification-Token
       description: Секрет заявки на верификацию из `startPhoneVerification`. Только в заголовке — не в URL.
   parameters:
+    ContentEncodingIdentity:
+      name: Content-Encoding
+      in: header
+      required: false
+      description: |
+        Только отсутствующий заголовок или один токен identity без учёта регистра. Другие значения,
+        включая gzip/br, список или несколько Content-Encoding, — 400 VALIDATION_ERROR после
+        техработ/версии/авторизации, но до чтения тела/размера/распаковки/сервиса. HTTP OWS нормализуется,
+        пустое значение не равно отсутствию. BFF проверяет все значения заголовка, не только первое;
+        kin-openapi не заменяет проверку повторённых заголовков. Запросы не распаковываются;
+        транспортный предел считает все UTF-8 байты исходного JSON, включая пробелы и escape.
+      schema:
+        type: string
+        pattern: '^[iI][dD][eE][nN][tT][iI][tT][yY]$'
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -1922,6 +1985,7 @@ components:
         UUID на одно логическое действие пользователя; клиент хранит его до окончательного ответа и повторяет
         при повторе запроса. Повтор с тем же ключом и телом возвращает сохранённый ответ (сохраняются только
         2xx, 400 кроме `CLIENT_VERSION_UNSUPPORTED`, 413, 422) — 24 часа, для `refreshTokens` — 60 секунд. Исключение —
+        BFF-only 413 REQUEST_TOO_LARGE всегда до ключа и не сохраняется.
         429 `RATE_LIMITED` на дубль в `startPhoneVerification` (номер занят у провайдера): сохраняется до своего
         `retry_at` и воспроизводится с пересчитанным от текущего момента `Retry-After`. Тот же ключ с другим телом —
         409 `IDEMPOTENCY_CONFLICT`; первый запрос ещё выполняется — 409 `REQUEST_IN_PROGRESS`.
@@ -2060,6 +2124,26 @@ components:
             error:
               code: REQUEST_IN_PROGRESS
               message: Request with this Idempotency-Key is in progress
+    RequestTooLarge:
+      description: |
+        `REQUEST_TOO_LARGE` — JSON-тело больше фактического транспортного предела BFF у шести операций
+        с x-min-request-body-bytes. Минимальный поддерживаемый предел — 65 536 байт UTF-8 JSON целиком,
+        включая пробелы и escape-последовательности; развёртывание может принимать больше, но не меньше.
+        Проверка Content-Length и ограниченного чтения потока — до сервиса/ключа, отказ не сохраняется.
+        Неизменённый запрос не повторяют; исправленное тело — новое действие
+        (новый ключ у операций с Idempotency-Key). Не FILE_TOO_LARGE.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: REQUEST_TOO_LARGE
+              message: JSON request body exceeds transport limit
+              retryable: false
     PayloadTooLarge:
       description: '`FILE_TOO_LARGE` — файл больше `max_file_size_bytes`.'
       headers:
@@ -2328,6 +2412,7 @@ components:
           x-extensible-enum:
           - VALIDATION_ERROR
           - CLIENT_VERSION_UNSUPPORTED
+          - REQUEST_TOO_LARGE
           - INVALID_TOKEN
           - TOKEN_EXPIRED
           - TOKEN_REVOKED
@@ -4325,6 +4410,11 @@ components:
     AnswerSource:
       type: object
       description: Строка источника под ответом (и событие `source`).
+      example:
+        calculated_at: '2026-09-25T19:11:00+03:00'
+        transfer_mode: with
+        changed_since: [unverified]
+        changed_since_text: Актуальность данных этого ответа не подтверждена
       required:
       - calculated_at
       - transfer_mode
@@ -4344,19 +4434,28 @@ components:
         changed_since:
           type: array
           description: |
-            Что изменилось после расчёта: `categories` — «с тех пор категории менялись»; `uploads` — загружали или
-            удаляли выписки. Пустой — ничего. Неизвестное — общий текст «с тех пор данные менялись».
+            Отличия ревизий исходных данных ответа: categories — категории или учётные правила,
+            uploads — загрузки/удаления выписок, time_zone — настройки часового пояса.
+            unverified — актуальность нельзя подтвердить, например у прежнего ответа без ревизий;
+            этот код не утверждает, что данные фактически менялись. Пустой список подтверждает совпадение
+            всех использованных ревизий с текущими primary-данными. Проверяется при чтении истории, перед snapshot
+            с источником и последующими source при обновлениях ответа; это не подписка на финансовые правки.
+            Временная транспортная недоступность проверки даёт unverified, ошибки доступа не подавляются.
+            Неизвестный код — показать changed_since_text.
           items:
             type: string
             x-extensible-enum:
             - categories
             - uploads
+            - unverified
+            - time_zone
         changed_since_text:
           type: string
           nullable: true
           description: |
-            Готовый текст о том же («с тех пор категории менялись»); нет — ничего не менялось. Для неизвестного кода
-            клиент показывает его (FIN-82).
+            Готовый текст об отличиях или неподтверждённой актуальности. Для unverified —
+            «Актуальность данных этого ответа не подтверждена». Нет — актуальность подтверждена.
+            Для неизвестного кода клиент показывает этот текст (FIN-82).
     AnswerSnapshotEvent:
       type: object
       description: Событие `snapshot` — всегда первое; клиент заменяет им показанное. При status failed сразу
@@ -4453,7 +4552,9 @@ components:
         code:
           type: string
           description: |
-            `MODEL_ERROR` — сбой или таймаут Alice AI; `CANNOT_ANSWER` — вопрос непонятен или на него нельзя ответить
+            `MODEL_ERROR` — сбой или таймаут Alice AI либо неверный список служебных ревизий финансового инструмента
+            (FIN-367): весь ответ failed, попытка возвращается, retryable=true;
+            `CANNOT_ANSWER` — вопрос непонятен или на него нельзя ответить
             по данным; канонический открытый reason валидного внутреннего Status переносится как code без ограничения
             старым enum/unary-реестром. При present-invalid Status внешний code=INTERNAL_ERROR, legacy-код не читается.
             Совпадение reason с REST-кодом не включает REST auth/maintenance/quota или resume исходного Ask;

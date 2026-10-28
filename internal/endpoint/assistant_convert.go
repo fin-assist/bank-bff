@@ -187,29 +187,46 @@ type Source struct {
 // changedPhrases build changed_since_text (grpc-api.md 5.3: bank-bff assembles it).
 var changedPhrases = map[string]string{"categories": "категории менялись", "uploads": "загружались выписки"}
 
+var sourceStatusTexts = map[string]string{"unverified": "Актуальность данных этого ответа не подтверждена", "time_zone": "Обновились настройки часового пояса"}
+
 func (c converter) source(s *assistantv1.AnswerSource) *Source {
 	if s == nil {
 		return nil
 	}
 	out := &Source{CalculatedAt: moment(s.GetCalculatedAt(), c.loc), DataRange: timeRange(s.DataRange, c.loc),
 		TransferMode: transferMode(s.GetTransferMode()), ChangedSince: []string{}}
-	var phrases []string
+	var phrases, statuses []string
 	unknown := false
+	seen := map[string]bool{}
 	for _, ch := range s.GetChangedSince() {
-		code, ok := enumCode(ch)
-		if !ok {
+		code, known := enumCode(ch)
+		text, statusKnown := sourceStatusTexts[code]
+		phrase, changeKnown := changedPhrases[code]
+		if !known || !statusKnown && !changeKnown {
 			unknown = true
 			c.metrics.Untranslated("AnswerSource.changed_since", "unknown")
 			continue
 		}
+		if seen[code] {
+			continue
+		}
+		seen[code] = true
 		out.ChangedSince = append(out.ChangedSince, code)
-		phrases = append(phrases, changedPhrases[code])
+		if statusKnown {
+			statuses = append(statuses, text)
+		} else {
+			phrases = append(phrases, phrase)
+		}
 	}
-	if unknown {
-		phrases = append(phrases, "данные менялись")
+	if unknown && !seen["unverified"] {
+		out.ChangedSince = append(out.ChangedSince, "unverified")
+		statuses = append(statuses, sourceStatusTexts["unverified"])
 	}
 	if len(phrases) > 0 {
-		text := "с тех пор " + strings.Join(phrases, " и ")
+		statuses = append([]string{"с тех пор " + strings.Join(phrases, " и ")}, statuses...)
+	}
+	if len(statuses) > 0 {
+		text := strings.Join(statuses, ". ")
 		out.ChangedSinceText = &text
 	}
 	return out

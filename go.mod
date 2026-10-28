@@ -3,13 +3,13 @@ module github.com/fin-assist/bank-bff
 go 1.26.0
 
 require (
-	github.com/fin-assist/contracts/gen/go v0.5.0
+	github.com/fin-assist/contracts/gen/go v0.6.0
 	github.com/fin-assist/go-grpc v0.2.0
 	github.com/fin-assist/go-identity v0.2.0
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/prometheus/client_golang v1.25.0
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b
-	google.golang.org/grpc v1.84.0
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261026165753-2ffab32bce7e
+	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 )
 
