@@ -1,5 +1,4 @@
-# Common commands; CI runs the same steps (.github/workflows/ci.yml).
-GOLANGCI_LINT_VERSION := v2.15.0
+# Local commands; pinned shared workflows select the matching CI steps.
 GO_TEST_COVERAGE_VERSION := v2.20.1
 COVERAGE := GOTOOLCHAIN=auto go run github.com/vladopajic/go-test-coverage/v2@$(GO_TEST_COVERAGE_VERSION)
 SHELL := /bin/bash
@@ -15,7 +14,7 @@ test: test-names ## go.mod tidy, unit/integration/API and script tests, changelo
 	go mod tidy -diff
 	go vet ./...
 	go test -race -count=1 -timeout=8m ./...
-	python3 -m unittest discover -s scripts -p 'test_*.py'
+	python3 -B -m unittest discover -s scripts -p 'test_*.py'
 	python3 scripts/changelog.py check
 
 release-check: ## VERSION=vX.Y.Z: validate the CHANGELOG section before tagging
@@ -61,11 +60,11 @@ cover: collect-unit collect-integration collect-api ## collect all profiles befo
 	@status=0; for level in unit integration api; do $(MAKE) check-$$level || status=1; done; \
 	$(MAKE) cover-combined || status=1; exit "$$status"
 
-lint: ## golangci-lint of the pinned version
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
+lint: ## shared pinned golangci-lint and rendered configuration
+	@common=$$(python3 scripts/common_ci.py) && python3 -B "$$common/lint.py" lint --root "$(CURDIR)"
 
-fmt:
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) fmt ./...
+fmt: ## format using the same pinned linter and configuration
+	@common=$$(python3 scripts/common_ci.py) && python3 -B "$$common/lint.py" fmt --root "$(CURDIR)"
 
 image: ## build the BFF image
 	docker build -t bank-bff:dev .
@@ -78,3 +77,12 @@ down:
 
 run: build ## run the HTTP BFF locally
 	ENV=dev LOG_FORMAT=text $(BIN) serve
+
+# FIN-372: shared lint source, identical locally and in CI.
+BASE_REF ?= origin/main
+.PHONY: lint-config lint-migrations
+lint-config: ## render the declared shared linter profile without running Go
+	python3 scripts/common_ci.py render
+
+lint-migrations: ## shared facade; no-op without migrations in stateless BFF
+	@common=$$(python3 scripts/common_ci.py) && python3 -B "$$common/lint.py" migrations --root "$(CURDIR)" --base "$(BASE_REF)"

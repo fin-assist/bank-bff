@@ -17,7 +17,7 @@ FIN-261 перенёс инфраструктуру HTTP BFF из go-service-tem
 
 PostgreSQL и testcontainers каркасу без БД не нужны; интеграционные тесты используют настоящий TCP/HTTP. При появлении stateful зависимости тесты должны использовать её настоящую реализацию. UI-тесты не входят в эту задачу.
 
-CI также запускает lint и сборку distroless/nonroot образа с HTTP smoke-проверкой обоих портов и SIGTERM. Версии инструментов — Makefile и workflow; toolchain — `go.mod`. Публикация GHCR/deploy и версия сервиса выполняются отдельно.
+CI также запускает lint и сборку distroless/nonroot образа с HTTP smoke-проверкой обоих портов и SIGTERM. Версии анализаторов и шаги CI определяет источник `go-ci`, закреплённый в `.finassist-ci.json`; локальные команды покрытия — Makefile, toolchain — `go.mod`. Публикация GHCR/deploy и версия сервиса выполняются отдельно.
 
 Для Python regression-тестов workflow нужен Node.js 20+ (`node` в PATH). Проверяется реальный read-only JS gate: fork/удалённый head/чужая base/закрытый PR/ошибка API не могут включить write-enabled job; отдельные issues не запускают ревью.
 
@@ -80,3 +80,5 @@ Malformed search items/range, change items и nil/пустой идентифи�
 становится пустым сообщением и проверяется как Category.id/absent. Отсутствие idempotency-key проверено
 у всех новых RPC, а unit фиксирует пять наблюдений длинного дедлайна. Обратный разбор kind строится
 по тому же generated descriptor, что и исходящий code; каждый известный ненулевой code проходит roundtrip.
+
+Первый `make test` или Python discovery также загружает закреплённый общий источник с GitHub. После загрузки проверенный кэш используется без сети; если кэша нет или он повреждён, запуск без сети завершается ошибкой до выполнения тестов. Для тестов скриптов нужен Python 3.11+ с PyYAML; `make test` использует `python3 -B`, чтобы поздние импорты не меняли общий кэш.

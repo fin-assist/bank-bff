@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- FIN-372: CI и линтеры используют общий источник `fin-assist/go-ci` по неизменяемому SHA; локальные команды и тесты скриптов используют проверенный кэш. Обновление и откат синхронизируют pins и копию bootstrap в одном PR. Runtime и публичный API не меняются.
+
 - FIN-368: неизвестная gRPC-причина актуальности получает `unverified` с готовым текстом и прежней метрикой; пустой changed_since зарезервирован для подтверждённого равенства. Публичные source/encoding сценарии остались API-only, отдельные integration проверяют mapper+gRPC и rest+HTTP/JWT/gRPC компоненты.
 
 - FIN-368 / FIN-339: contracts/gen/go v0.6.0 и точная встроенная OpenAPI-копия merged `1c624f5`. Сопутствующая совместимость шести JSON-операций: все Content-Encoding проверяются до чтения/size/decode, недопустимое значение — 400 без чтения тела приложением, его drain и RPC; полный startup Validate включает исправленные примеры и defaults. Auth/idempotency, bodyless и upload политики сохраняются.
