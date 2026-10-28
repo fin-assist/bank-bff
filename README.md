@@ -44,6 +44,8 @@ make cover  # >=80% всего production-модуля отдельно unit/int
 
 ## Общий Go CI и линтеры (FIN-372)
 
+В CI `GO_MODULES_TOKEN` передаётся только при доверенном push в `main`, включая сборку образа. Ни один PR, в том числе из того же репозитория, этот секрет не получает. Текущие модули fin-assist публичны. Одного добавления секрета недостаточно для проверки PR с приватными Go-модулями: доступ в PR этой конфигурацией не предоставляется.
+
 Общие команды и тесты скриптов требуют Python 3.11+ с PyYAML.
 
 `.finassist-ci.json` закрепляет общий источник полным SHA и объявляет профиль/исключения. CI вызывает reusable workflows того же SHA; `make lint`, `make fmt`, `make lint-config` и `make lint-migrations BASE_REF=origin/main` используют его через `scripts/common_ci.py`. Конфигурации создаются в игнорируемом `.finassist-ci/generated/`; локальные копии правил не редактируются. Первый локальный вызов требует доступ к GitHub. Обновление workflow и manifest pin приходит одним PR Renovate; откат возвращает прежние SHA вместе. [Источник, профили, обновление и откат](https://github.com/fin-assist/go-service-template/blob/main/docs/shared-go-ci.md). Проверки тестов/coverage, race и совместимость сохраняются; BFF по-прежнему не использует PostgreSQL, Squawk и миграции. Для обновлений добавлен корневой `renovate.json` с `automerge: false`; управляемый контроллер Renovate не добавляется.
