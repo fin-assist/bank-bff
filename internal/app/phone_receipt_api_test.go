@@ -54,7 +54,12 @@ func TestAPIPhoneReceiptMappingTrustedIPAndFreshResponse(t *testing.T) {
 			version := strings.Repeat("🙂", 64)
 			for index := range 2 {
 				resp := b.do(t, phoneReceiptRequest(phoneReceiptJSON(true, true, version)))
-				got := <-received
+				var got *userv1.StartPhoneVerificationRequest
+				select {
+				case got = <-received:
+				default:
+					t.Fatalf("assertions did not reach USER: %d %s", resp.StatusCode, resp.body)
+				}
 				if resp.StatusCode != 200 || got.Phone != "+79001234567" || !got.PdConsentAccepted || !got.AgeConfirmed || got.PdConsentVersion != version || resp.json["expires_in"] != float64(remaining[index]) || resp.Header.Get("Cache-Control") != "no-store" {
 					t.Fatalf("receipt mapping/replay changed: %d %s %+v", resp.StatusCode, resp.body, got)
 				}
@@ -157,7 +162,12 @@ func TestAPIPhoneReceiptServicePrecedenceErrorsAndRetryAdvice(t *testing.T) {
 			})
 			before := len(b.peers.Calls(userv1.AuthService_StartPhoneVerification_FullMethodName))
 			r := b.do(t, phoneReceiptRequest(phoneReceiptJSON(tc.consent, tc.age, tc.version)))
-			got := <-accepted
+			var got *userv1.StartPhoneVerificationRequest
+			select {
+			case got = <-accepted:
+			default:
+				t.Fatalf("assertions did not reach USER: %d %s", r.StatusCode, r.body)
+			}
 			if got.PdConsentAccepted != tc.consent || got.AgeConfirmed != tc.age || got.PdConsentVersion != tc.version || r.StatusCode != tc.status || errorCode(r) != tc.code || r.json["error"].(map[string]any)["retryable"] != false || r.Header.Get("Cache-Control") != "no-store" || strings.Contains(string(r.body), "PRIVATE") {
 				t.Fatalf("policy precedence/projection changed: %d %s %+v", r.StatusCode, r.body, got)
 			}
@@ -198,7 +208,12 @@ func TestAPIRegisterRetainsOriginalReceiptAssertionsWithoutCurrentDocumentFetch(
 	for _, consent := range []bool{true, false} {
 		body, _ := json.Marshal(map[string]any{"registration_token": "receipt-bound-token", "pd_consent_accepted": consent, "pd_consent_version": "previous-document-version"})
 		r := b.do(t, request{method: "POST", path: "/v1/auth/register", route: "/v1/auth/register", body: string(body), header: base(map[string]string{"Idempotency-Key": idemKey})})
-		got := <-received
+		var got *userv1.RegisterRequest
+		select {
+		case got = <-received:
+		default:
+			t.Fatalf("receipt assertions did not reach USER: %d %s", r.StatusCode, r.body)
+		}
 		want := 201
 		if !consent {
 			want = 401
@@ -218,7 +233,13 @@ func TestAPIRegisterRetainsOriginalReceiptAssertionsWithoutCurrentDocumentFetch(
 	version := strings.Repeat("🙂", 64)
 	body, _ := json.Marshal(map[string]any{"registration_token": "receipt-bound-token", "pd_consent_accepted": true, "pd_consent_version": version})
 	r := b.do(t, request{method: "POST", path: "/v1/auth/register", route: "/v1/auth/register", body: string(body), header: base(map[string]string{"Idempotency-Key": idemKey})})
-	if got := <-received; r.StatusCode != 201 || got.PdConsentVersion != version {
+	var got *userv1.RegisterRequest
+	select {
+	case got = <-received:
+	default:
+		t.Fatalf("Unicode receipt did not reach USER: %d %s", r.StatusCode, r.body)
+	}
+	if r.StatusCode != 201 || got.PdConsentVersion != version {
 		t.Fatal("Unicode receipt version changed", r.StatusCode)
 	}
 	if len(b.peers.Calls(userv1.ConsentDocumentService_GetConsentDocument_FullMethodName)) != 0 {

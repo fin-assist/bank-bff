@@ -79,6 +79,7 @@ func TestIntegrationPhoneReceiptAssertionsAndTrustedMetadata(t *testing.T) {
 			t.Fatal(err)
 		}
 		server := httptest.NewServer(h)
+		t.Cleanup(server.Close)
 		client := &http.Client{Timeout: 5 * time.Second}
 		for _, accepted := range []bool{true, false} {
 			body, _ := json.Marshal(map[string]any{"phone": "+79001234567", "pd_consent_accepted": accepted, "pd_consent_version": "receipt-v", "age_confirmed": true})
@@ -109,7 +110,12 @@ func TestIntegrationPhoneReceiptAssertionsAndTrustedMetadata(t *testing.T) {
 			if resp.StatusCode != want || resp.Header.Get("Cache-Control") != "no-store" {
 				t.Fatalf("%d %s", resp.StatusCode, data)
 			}
-			got := <-received
+			var got *userv1.StartPhoneVerificationRequest
+			select {
+			case got = <-received:
+			default:
+				t.Fatalf("assertions did not reach USER: %d %s", resp.StatusCode, data)
+			}
 			if got.Phone != "+79001234567" || got.PdConsentAccepted != accepted || got.PdConsentVersion != "receipt-v" || !got.AgeConfirmed {
 				t.Fatal("assertions changed", got)
 			}
@@ -124,7 +130,10 @@ func TestIntegrationPhoneReceiptAssertionsAndTrustedMetadata(t *testing.T) {
 			}
 		}
 		before := len(peers.Calls(userv1.AuthService_StartPhoneVerification_FullMethodName))
-		req, _ := http.NewRequestWithContext(t.Context(), "POST", server.URL+"/v1/auth/phone", strings.NewReader(`{"phone":"+79001234567"}`))
+		req, err := http.NewRequestWithContext(t.Context(), "POST", server.URL+"/v1/auth/phone", strings.NewReader(`{"phone":"+79001234567"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Client-Version", "android/0.2.5+41")
 		req.Header.Set("Idempotency-Key", testKey)
@@ -137,6 +146,5 @@ func TestIntegrationPhoneReceiptAssertionsAndTrustedMetadata(t *testing.T) {
 		if resp.StatusCode != 400 || len(peers.Calls(userv1.AuthService_StartPhoneVerification_FullMethodName)) != before {
 			t.Fatal("legacy body reached USER")
 		}
-		server.Close()
 	}
 }
