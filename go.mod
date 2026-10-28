@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/fin-assist/contracts/gen/go v0.6.0
 	github.com/fin-assist/go-grpc v0.2.0
-	github.com/fin-assist/go-identity v0.2.0
+	github.com/fin-assist/go-identity v0.2.1
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/prometheus/client_golang v1.25.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261026165753-2ffab32bce7e
