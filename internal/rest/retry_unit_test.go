@@ -73,7 +73,7 @@ func TestUnitRequestRetryRequiresBothGuarantees(t *testing.T) {
 		{"PUT", "/v1/profile/assistant-consent", "/v1/profile/assistant-consent", `{"version":"v1"}`, false, true},
 		{"DELETE", "/v1/profile/assistant-consent", "/v1/profile/assistant-consent", "", false, true},
 		{"GET", "/v1/profile", "/v1/profile", "", false, false},
-		{"POST", "/v1/auth/phone", "/v1/auth/phone", `{"phone":"+79001234567"}`, true, false},
+		{"POST", "/v1/auth/phone", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, true, false},
 		{"POST", "/v1/auth/register", "/v1/auth/register", `{"registration_token":"registration","pd_consent_accepted":true,"pd_consent_version":"v1"}`, true, false},
 		{"POST", "/v1/auth/token", "/v1/auth/token", `{"refresh_token":"refresh"}`, true, false},
 		{"POST", "/v1/auth/logout", "/v1/auth/logout", `{"refresh_token":"refresh"}`, false, false},

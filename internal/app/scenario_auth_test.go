@@ -102,7 +102,7 @@ func scenarioStartPhone(t *testing.T, start starter) {
 				ExpiresAt: timestamppb.New(time.Date(2026, 10, 4, 19, 17, 0, 0, time.UTC)), ExpiresIn: proto.Int32(300)}, nil
 		}
 	})
-	ok := request{method: "POST", path: "/v1/auth/phone", route: "/v1/auth/phone", body: `{"phone":"+79001234567"}`,
+	ok := request{method: "POST", path: "/v1/auth/phone", route: "/v1/auth/phone", body: `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`,
 		header: base(map[string]string{"Idempotency-Key": idemKey, "Authorization": "Bearer " + b.keys.Access("u1"), "X-Forwarded-For": "1.2.3.4"})}
 	r := b.do(t, ok)
 	if r.StatusCode != 200 || r.json["expires_at"] != "2026-10-04T22:17:00+03:00" || r.json["expires_in"] != 300.0 || got.GetPhone() != "+79001234567" || r.Header.Get("X-Request-Id") != requestID {
@@ -134,11 +134,11 @@ func scenarioStartPhone(t *testing.T, start starter) {
 	}
 	calls := len(b.peers.Calls(userv1.AuthService_StartPhoneVerification_FullMethodName))
 	for _, bad := range []request{
-		{body: `{"phone":"89001234567"}`, header: base(map[string]string{"Idempotency-Key": idemKey})},
-		{body: `{"phone":"+79001234567"}`, header: base(nil)},
-		{body: `{"phone":"+79001234567"}`, header: base(map[string]string{"Idempotency-Key": "not-a-uuid"})},
+		{body: `{"phone":"89001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, header: base(map[string]string{"Idempotency-Key": idemKey})},
+		{body: `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, header: base(nil)},
+		{body: `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, header: base(map[string]string{"Idempotency-Key": "not-a-uuid"})},
 		{body: `{"phone":`, header: base(map[string]string{"Idempotency-Key": idemKey})},
-		{body: `{"phone":"+79001234567"}`, header: base(map[string]string{"Idempotency-Key": idemKey, "Content-Type": "text/plain"})},
+		{body: `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, header: base(map[string]string{"Idempotency-Key": idemKey, "Content-Type": "text/plain"})},
 	} {
 		bad.method, bad.path, bad.route = "POST", "/v1/auth/phone", "/v1/auth/phone"
 		if r := b.do(t, bad); r.StatusCode != 400 || errorCode(r) != "VALIDATION_ERROR" {

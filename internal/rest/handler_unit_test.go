@@ -54,7 +54,7 @@ func validate(t *testing.T, method, route, target, body string, header map[strin
 
 func TestUnitValidateMapsSchemaViolations(t *testing.T) {
 	key := map[string]string{"Idempotency-Key": "0190c3a0-1b2c-7d3e-8f40-123456789abc"}
-	if d := validate(t, "POST", "/v1/auth/phone", "/v1/auth/phone", `{"phone":"+79001234567"}`, key); d != nil {
+	if d := validate(t, "POST", "/v1/auth/phone", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, key); d != nil {
 		t.Fatalf("valid: %+v", d)
 	}
 	for _, tc := range []struct {
@@ -62,11 +62,11 @@ func TestUnitValidateMapsSchemaViolations(t *testing.T) {
 		header                            map[string]string
 		want                              []Detail
 	}{
-		{"pattern", "POST", "/v1/auth/phone", "/v1/auth/phone", `{"phone":"89001234567"}`, key, []Detail{{"phone", DetailInvalidFormat, "has invalid format"}}},
-		{"missing property", "POST", "/v1/auth/phone", "/v1/auth/phone", `{}`, key, []Detail{{"phone", DetailRequired, "is required"}}},
+		{"pattern", "POST", "/v1/auth/phone", "/v1/auth/phone", `{"phone":"89001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, key, []Detail{{"phone", DetailInvalidFormat, "has invalid format"}}},
+		{"missing property", "POST", "/v1/auth/phone", "/v1/auth/phone", `{"pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, key, []Detail{{"phone", DetailRequired, "is required"}}},
 		{"type", "POST", "/v1/auth/register", "/v1/auth/register", `{"registration_token":1,"pd_consent_accepted":"yes","pd_consent_version":"v"}`, key,
 			[]Detail{{"pd_consent_accepted", DetailInvalidFormat, "has invalid format"}, {"registration_token", DetailInvalidFormat, "has invalid format"}}},
-		{"missing header", "POST", "/v1/auth/phone", "/v1/auth/phone", `{"phone":"+79001234567"}`, nil, []Detail{{"Idempotency-Key", DetailRequired, "is required"}}},
+		{"missing header", "POST", "/v1/auth/phone", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, nil, []Detail{{"Idempotency-Key", DetailRequired, "is required"}}},
 		{"empty body", "POST", "/v1/auth/token", "/v1/auth/token", ``, key, []Detail{{"", DetailRequired, "is required"}}},
 		{"not json", "POST", "/v1/auth/token", "/v1/auth/token", `{"refresh_token":`, key, []Detail{{"", DetailInvalidFormat, "has invalid format"}}},
 		{"length", "POST", "/v1/assistant/messages", "/v1/assistant/messages", `{"text":""}`, key, []Detail{{"text", DetailOutOfRange, "is out of range"}}},
@@ -197,8 +197,8 @@ func TestUnitHandlerOrdersChecksAndRoutes(t *testing.T) {
 		{"version before routing", "GET", "/v1/unknown", "", map[string]string{"X-Client-Version": ""}, 400, "CLIENT_VERSION_UNSUPPORTED"},
 		{"token before validation", "POST", "/v1/assistant/messages/a1/retry", "{}", nil, 401, "INVALID_TOKEN"},
 		{"version before token", "GET", "/v1/profile", "", map[string]string{"X-Client-Version": "android/0.1.0+1"}, 400, "CLIENT_VERSION_UNSUPPORTED"},
-		{"missing key", "POST", "/v1/auth/phone", `{"phone":"+79001234567"}`, nil, 400, "VALIDATION_ERROR"},
-		{"malformed key", "POST", "/v1/auth/phone", `{"phone":"+79001234567"}`, map[string]string{"Idempotency-Key": "k-1"}, 400, "VALIDATION_ERROR"},
+		{"missing key", "POST", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, nil, 400, "VALIDATION_ERROR"},
+		{"malformed key", "POST", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, map[string]string{"Idempotency-Key": "k-1"}, 400, "VALIDATION_ERROR"},
 		{"body too large", "POST", "/v1/auth/phone", `{"phone":"` + strings.Repeat("1", MinBodyLimit) + `"}`, map[string]string{"Idempotency-Key": key}, 413, "REQUEST_TOO_LARGE"},
 		{"body on a bodiless operation", "POST", "/v1/assistant/messages/a1/retry", "{}", map[string]string{"Authorization": "Bearer good", "Idempotency-Key": key}, 400, "VALIDATION_ERROR"},
 	} {
@@ -225,7 +225,7 @@ func TestUnitHandlerOrdersChecksAndRoutes(t *testing.T) {
 	if h0.IdempotencyKey != key || h0.ClientVersion != "android/0.2.5+41" || !h0.ReadPrimary || c.R.PathValue("answer_id") != "a1" || reqctx.RequestID(c.R.Context()) == "" || c.Op.Route.Path != "/v1/assistant/messages/{answer_id}/retry" {
 		t.Fatalf("%+v", h0)
 	}
-	if res := serve("POST", "/v1/auth/phone", `{"phone":"+79001234567"}`, map[string]string{"Idempotency-Key": key}); res.Code != 204 || string(calls[1].Body) != `{"phone":"+79001234567"}` {
+	if res := serve("POST", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, map[string]string{"Idempotency-Key": key}); res.Code != 204 || string(calls[1].Body) != `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}` {
 		t.Fatalf("anonymous operation: %d %s", res.Code, res.Body.String())
 	}
 	if _, err := Handler(handlerConfig(t), []Route{{Method: "GET", Path: "/v1/nothing"}}); err == nil {

@@ -97,7 +97,7 @@ func runJSONEncodingAPI(t *testing.T) {
 		method, path, body, rpc string
 		status                  int
 	}{
-		{"POST", "/v1/auth/phone", `{"phone":"+79001234567"}`, userv1.AuthService_StartPhoneVerification_FullMethodName, 200},
+		{"POST", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, userv1.AuthService_StartPhoneVerification_FullMethodName, 200},
 		{"POST", "/v1/auth/register", `{"registration_token":"rt","pd_consent_accepted":true,"pd_consent_version":"v"}`, userv1.AuthService_Register_FullMethodName, 201},
 		{"POST", "/v1/auth/token", `{"refresh_token":"rt"}`, userv1.AuthService_RefreshTokens_FullMethodName, 200},
 		{"POST", "/v1/auth/logout", `{"refresh_token":"rt"}`, userv1.AuthService_Logout_FullMethodName, 204},

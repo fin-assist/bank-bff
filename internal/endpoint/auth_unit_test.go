@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -20,6 +21,75 @@ import (
 	"github.com/fin-assist/bank-bff/internal/rest"
 )
 
+func TestUnitStartPhonePreservesConsentAgeAndVersionAssertions(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	for _, accepted := range []bool{true, false} {
+		for _, age := range []bool{true, false} {
+			var got *userv1.StartPhoneVerificationRequest
+			u.f.start = func(in *userv1.StartPhoneVerificationRequest) (*userv1.StartPhoneVerificationResponse, error) {
+				got = in
+				return &userv1.StartPhoneVerificationResponse{ExpiresAt: timestamppb.New(time.Now())}, nil
+			}
+			version := strings.Repeat("🙂", 64)
+			body, _ := json.Marshal(map[string]any{"phone": "+79001234567", "pd_consent_accepted": accepted, "pd_consent_version": version, "age_confirmed": age,
+				"PD_CONSENT_ACCEPTED": !accepted, "AGE_CONFIRMED": !age, "Pd_Consent_Version": "unvalidated-alias"})
+			r := u.serve(t, "POST", "/v1/auth/phone", string(body), nil)
+			if r.Code != 200 || got.GetPhone() != "+79001234567" || got.GetPdConsentAccepted() != accepted || got.GetPdConsentVersion() != version || got.GetAgeConfirmed() != age {
+				t.Fatalf("REST assertions changed before USER: %d %+v", r.Code, got)
+			}
+		}
+	}
+}
+
+func TestUnitStartPhoneStructuralReceiptFieldsRejectBeforeRPC(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	calls := 0
+	u.f.start = func(*userv1.StartPhoneVerificationRequest) (*userv1.StartPhoneVerificationResponse, error) {
+		calls++
+		return nil, finerr.InternalError()
+	}
+	base := map[string]any{"phone": "+79001234567", "pd_consent_accepted": true, "pd_consent_version": "v", "age_confirmed": true}
+	for _, field := range []string{"phone", "pd_consent_accepted", "pd_consent_version", "age_confirmed"} {
+		for _, mode := range []string{"missing", "null", "type"} {
+			t.Run(field+"/"+mode, func(t *testing.T) {
+				in := make(map[string]any, len(base))
+				for key, value := range base {
+					in[key] = value
+				}
+				switch mode {
+				case "missing":
+					delete(in, field)
+				case "null":
+					in[field] = nil
+				case "type":
+					in[field] = 17
+				}
+				body, _ := json.Marshal(in)
+				r := u.serve(t, "POST", "/v1/auth/phone", string(body), nil)
+				if r.Code != 400 || r.code() != "VALIDATION_ERROR" || calls != 0 {
+					t.Fatalf("invalid receipt reached USER: %d %v calls%d", r.Code, r.json, calls)
+				}
+				details := r.json["error"].(map[string]any)["details"].([]any)
+				code := "INVALID_FORMAT"
+				if mode == "missing" {
+					code = "REQUIRED"
+				}
+				if len(details) != 1 || details[0].(map[string]any)["field"] != field || details[0].(map[string]any)["code"] != code {
+					t.Fatal("structural field detail changed", details)
+				}
+			})
+		}
+	}
+	for _, version := range []string{"", strings.Repeat("🙂", 65)} {
+		base["pd_consent_version"] = version
+		body, _ := json.Marshal(base)
+		r := u.serve(t, "POST", "/v1/auth/phone", string(body), nil)
+		if r.Code != 400 || r.code() != "VALIDATION_ERROR" || calls != 0 {
+			t.Fatalf("out-of-bounds version reached USER: %d %v", r.Code, r.json)
+		}
+	}
+}
+
 func TestUnitStartPhone(t *testing.T) {
 	u := newUnitAPI(t, rest.StreamLimits{})
 	expires := time.Date(2026, 10, 4, 19, 17, 0, 0, time.UTC)
@@ -28,7 +98,7 @@ func TestUnitStartPhone(t *testing.T) {
 		got = in
 		return &userv1.StartPhoneVerificationResponse{VerificationToken: "vt", CallbackNumber: "+74951234567", ExpiresAt: timestamppb.New(expires), ExpiresIn: proto.Int32(300)}, nil
 	}
-	r := u.serve(t, "POST", "/v1/auth/phone", `{"phone":"+79001234567"}`, map[string]string{"Authorization": ""})
+	r := u.serve(t, "POST", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, map[string]string{"Authorization": ""})
 	if r.Code != 200 || got.GetPhone() != "+79001234567" || r.json["expires_at"] != "2026-10-04T22:17:00+03:00" || r.json["expires_in"] != 300.0 || r.json["verification_token"] != "vt" {
 		t.Fatalf("%d %v", r.Code, r.json)
 	}
@@ -38,7 +108,7 @@ func TestUnitStartPhone(t *testing.T) {
 	u.f.start = func(*userv1.StartPhoneVerificationRequest) (*userv1.StartPhoneVerificationResponse, error) {
 		return &userv1.StartPhoneVerificationResponse{ExpiresAt: timestamppb.New(expires)}, nil
 	}
-	if r := u.serve(t, "POST", "/v1/auth/phone", `{"phone":"+79001234567"}`, nil); r.Code != 200 || r.json["expires_in"] != nil {
+	if r := u.serve(t, "POST", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, nil); r.Code != 200 || r.json["expires_in"] != nil {
 		t.Fatalf("old server without expires_in: %v", r.json)
 	}
 	retryAt := time.Now().Add(time.Minute).Truncate(time.Second)
@@ -49,6 +119,9 @@ func TestUnitStartPhone(t *testing.T) {
 	}{
 		{finerr.RateLimited(retryAt), 429, "RATE_LIMITED"},
 		{finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "phone", Reason: "INVALID_FORMAT"}), 400, "VALIDATION_ERROR"},
+		{finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "age_confirmed", Reason: "REQUIRED"}), 400, "VALIDATION_ERROR"},
+		{finerr.ConsentRequired(), 403, "CONSENT_REQUIRED"},
+		{finerr.ConsentOutdated(), 422, "CONSENT_OUTDATED"},
 		{finerr.IdempotencyConflict(), 409, "IDEMPOTENCY_CONFLICT"},
 		{finerr.RequestInProgress(2 * time.Second), 409, "REQUEST_IN_PROGRESS"},
 		{status.Error(codes.Unavailable, "down"), 500, "INTERNAL_ERROR"},
@@ -57,7 +130,7 @@ func TestUnitStartPhone(t *testing.T) {
 		u.f.start = func(*userv1.StartPhoneVerificationRequest) (*userv1.StartPhoneVerificationResponse, error) {
 			return nil, tc.err
 		}
-		r := u.serve(t, "POST", "/v1/auth/phone", `{"phone":"+79001234567"}`, nil)
+		r := u.serve(t, "POST", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`, nil)
 		if r.Code != tc.status || r.code() != tc.code {
 			t.Fatalf("%v: %d %v", tc.err, r.Code, r.json)
 		}

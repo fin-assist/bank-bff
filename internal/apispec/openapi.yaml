@@ -149,22 +149,118 @@ paths:
       summary: Начать верификацию телефона
       description: |
         Создаёт заявку на подтверждение номера обратным звонком. До подтверждения API не сообщает,
-        зарегистрирован ли номер. Повтор с тем же `Idempotency-Key` возвращает ту же заявку и не расходует
+        зарегистрирован ли номер. После успешного старта повтор с тем же `Idempotency-Key` возвращает ту же заявку и не расходует
         лимит верификаций — в том числе после `expires_at` (ответ хранится 24 ч), поэтому новая заявка — с новым
         ключом.
 
-        Ключ проверяется до лимитов: повтор с известным ключом и тем же телом получает сохранённый ответ без
-        проверок ниже; тот же ключ с другим телом — 409 `IDEMPOTENCY_CONFLICT`, а не 429. Для неизвестного ключа —
+        До передачи телефона провайдеру сервер требует отдельные pd_consent_accepted: true,
+        актуальную pd_consent_version и age_confirmed: true (14+). Обе отметки по умолчанию сняты.
+        Структура/возраст — 400 VALIDATION_ERROR, отказ в согласии — 403 CONSENT_REQUIRED,
+        неактуальная версия — 422 CONSENT_OUTDATED. Эти правила одинаковы для новых и существующих номеров.
+        После проверок и до внешнего вызова user сохраняет долговечное доказательство с серверными
+        временем, версией, проверенным x-client-ip и связью с попыткой; ошибка БД запрещает вызов.
+        Локальный timeout неизвестного исхода — PHONE_VERIFICATION_UNKNOWN_TIMEOUT, default 5m; целевая
+        настройка FIN-364 со startup validation Go duration 1s..5m, без hot reload/новых REST-полей.
+        Абсолютный deadline сохраняется один раз при первом приёме (приём + тогдашнее env); смена env,
+        перезапуск, recovery/replay не пересчитывают и не продлевают его. Фиксированный provider TTL 5 минут,
+        expires_at известной заявки/15 минут результата этим env не меняются. До первого вызова атомарно фиксируются долговечная отметка
+        «вызов мог начаться», immutable first_dispatch_at в той же транзакции и конечный dispatch_not_after не позже локального срока. Только впервые
+        записавший отметку исполнитель вправе сделать один первый вызов строго до границы с дедлайном
+        не позже неё; позже не вправе и он. Существующая отметка — только читающая сверка, даже при crash
+        между commit и отправкой. Повторный confirm/Start и retry-middleware запрещены навсегда.
+        Версия закрепляется на срок заявки и 15 минут результата verified; новый документ за это время
+        не требует нового согласия. Register использует исходные подтверждения, без повторной отметки.
+        Доказательство не означает владение номером до verified; связь с аккаунтом появляется после звонка.
+        Старые pending/results без доказательств недействительны: Watch/Register — INVALID_TOKEN.
+        Каждый отдельный принятый Start сохраняет своё доказательство с временем и IP даже при той же версии;
+        Watch/refresh и их IP в него не добавляются. Хранение отдельно от аккаунта: для связанного аккаунта
+        3 года после удаления/отзыва по Политике;
+        для брошенной регистрации 24 часа с окончания срока заявки (решение 28.10.2026).
+        Cleanup сериализуется с привязкой аккаунта; подробности и provider failure — api.md 1.1.
+
+        До лимитов/занятости проверяется сохранённый ответ и долговечная попытка без ответа после 5xx.
+        Известная попытка не списывает лимит повторно и не получает 429 против собственной резервации:
+        активный исполнитель — REQUEST_IN_PROGRESS, иначе продолжение по состоянию. До локального срока
+        неизвестный исход удерживает номер в карантине. Новый ключ получает существующий RATE_LIMITED 429,
+        retry_at = сохранённый unknown deadline, округлённый вверх до минуты, без confirm. Кэш до retry_at,
+        пересчёт Retry-After и phone/IP accounting следуют общим правилам дубля: replay до retry_at не
+        списывает повторно, после него ключ выполняется заново. Лимиты проверяются до состояния;
+        лимитный 429 не проверяет карантин, не списывает попытку и не кэшируется. Это отдельно от recovery
+        и терминального учёта исходного unknown-ключа.
+        При ошибке продолжения до локального срока true допустим лишь с проверенным read-only путём:
+        явный RequestRetryInfo{retryable: true}, иначе false. BFF соединяет permission с доказанной safety.
+        Тот же ключ продолжает состояние без повторного confirm/списания/продления TTL. «Не найдено»
+        не является определённым отказом: запрос мог ещё не дойти. Определённый окончательный ответ первого
+        вызова, гарантирующий отсутствие созданной заявки, закрывает попытку раньше срока с явным false.
+        Если к локальному сроку исход так и не установлен, рабочая попытка атомарно закрывается и номер
+        освобождается. Владелец выбрал сохранённый unknown deadline с default 5 минут от первого приёма,
+        приняв риск поздней внешней заявки,
+        ещё действующей прежней заявки и дубля (28.10.2026). Локальное закрытие не отменяет внешний вызов;
+        HTTP timeout не доказывает отсутствия позднего принятия. Provider-off/гарантия Zvonok не требуются.
+        Уже установленный и сохранённый результат следует обычным срокам известной заявки/15 минутам verified.
+        Старый ключ в обычном 24-часовом окне сохраняет терминальное состояние/hash/связь с доказательством:
+        то же тело — INTERNAL_ERROR с явным false, другое — IDEMPOTENCY_CONFLICT. Нет confirm, восстановления
+        pending/старых токенов/результата или смены времени согласия. В обычном окне старого ключа новое
+        действие использует новый ключ и проходит gates с новым доказательством. Replay/конфликт/учёт
+        действуют 24 часа с первого приёма ключа, не unknown deadline + 24 часа; архив не продлевает lookup.
+        После обычного окна тот же UUID — fresh-запрос по общему правилу, без восстановления старой заявки. Поздние webhook/исполнитель/сверка
+        не открывают закрытую попытку и не переносят прежнее подтверждение новой; рабочие jobs прекращаются.
+        По unknown deadline закрывается рабочее состояние, архив не удаляется. Отдельное доказательство брошенной
+        регистрации хранится 24 часа после окончания заявки; при неизвестном внешнем сроке — после исходного
+        unknown deadline (приём + тогдашний PHONE_VERIFICATION_UNKNOWN_TIMEOUT). Сверки/освобождение не продлевают retention; терминальные key records
+        допустимы внутри него без active phone-fence. Связанное с подтверждённым аккаунтом proof — прежние
+        3 года после удаления/отзыва. На конце retention удаляются связанные PII/производные: evidence,
+        phone/IP, request_hash/key/resource bindings, token hashes/result ciphertext, персональные jobs
+        и связи карантинных отказов. Общие rate-limit окна/сроки сохраняются, списания не возвращаются;
+        другие live account/attempt данные не удаляются. Очистка сериализуется с привязкой к аккаунту.
+        Zvonok confirm может вернуть прежний ID. (Provider, configured campaign, ID) unique между live/archive;
+        чужой ID не перепривязывается. Campaign устанавливается trusted запросом/binding, не клиентом.
+        Unbound C требует same phone/campaign и created в [first_dispatch_at.Truncate(1ms) − ε, recv + ε].
+        Для Zvonok ClockSkewTolerance=1s — finite adapter constant, не env; precision1ms не равна zero skew.
+        При read-only recovery верх — authenticated read recv+ε, пока C open и до captured unknown deadline.
+        Нельзя произвольно расширять окно/подставлять local time. First binding — только pending
+        new/wait/in_process, completed null/zero, не pincode_ok/terminal, pool1–1000 distinct E.164.
+        Once сохраняются declared_provider_expiry=created+fixed5m; public/verification expires_at=declared−ε;
+        known_busy_until=declared+ε. Повтор ID/replay/restart не пересчитывает created/deadlines.
+        На commit строго Duration(public_deadline−now)>0, без hidden usability threshold;
+        expires_in=floor(max(0,public_deadline−now)) может быть0 при положительном остатке<1s.
+        Fake/local может ε0 с теми же gates; usecase получает проверенные сроки через интерфейс без providerName switch.
+        Commit атомарно проверяет unique binding, все admission условия, C open и now<unknown deadline.
+        Created до lower — старый кандидат; за upper/противоречивые поля — safe error. Closed archive не вводит lock.
+        Late A внутри расширенного интервала — остаточный принятый риск без наследования terminal результата/новогоTTL.
+        Subsequent proof — authenticated проверка текущего binding. Window-distance/RTT наблюдаются как
+        bounded metrics/агрегированная диагностика без PII/IDs/raw payload, не точный offset из latency.
+        Dispatched C при trusted old/foreign/unusable ID terminal. Только валидный same-phone/campaign
+        NONTERMINAL call с known_busy_until>now создаёт known-busy факт (не ownership чужого ID).
+        C получает cached429 до future ceilMinute(known_busy_until) с явным RequestRetryInfo false/REST retryable false; после retry_at его исходный ключ в24hокне
+        получает terminal INTERNAL_ERROR false, без confirm/новогоreceipt. B/D получают DB429 до busy безHTTP;
+        их pre-dispatch duplicate keys после retry_at могут выполняться заново по обычному правилу.
+        Получив429, клиент ждёт retry_at и для нового осознанного Start создаёт новый key; transport retry
+        потерянного ответа до окончательного исхода сохраняет старый key/body. Terminal C429 сохраняет false
+        и не разрешает auto-reconfirm старым key: RetryInfo лишь время новой попытки. Server B/D compatibility
+        reuse после retry_at не требует от нового клиента угадывать фазу; новых wire fields/error_spec нет.
+        Trusted terminal/pincode_ok или уже прошедший busy_until дают C terminal500false без fake fence/past429.
+        Malformed/untrusted ответ идёт по обычному unknown/recoverydeadline, без busy из недоверенного payload.
+        Bare provider duplicate без created сохраняет прежний finite fallback только с future retry_at, иначе
+        terminal false без fake fence; original dispatched C всё равно
+        terminal после cached429. Recover с повторным confirm заменяется читающим путём FIN-364.
+        Late executor A с causal context может дописать ID/created/declared expiry/public/busy только в ещё живой архив A без
+        reopen/auth/продления retention; уже связанный C ID не отнимается. Webhook не содержит AttemptID:
+        только authenticated call_by_id + existing unambiguous binding позволяют обновить архив, не ct_phone
+        или догадка по архиву. Иначе unknown-call/ignore без binding; наблюдение не обязательно для нового
+        входа, не вводит active fence/карантин и не воссоздаёт удалённый архив.
+        Для неизвестного ключа —
         сначала лимиты верификаций на номер и на адрес (при превышении `retry_at` — срок лимита, занятость номера не
         проверяется), затем занятость номера.
 
-        Провайдер не принимает повторную заявку на тот же номер до конца срока предыдущей, даже если по ней уже
-        вошли. Поэтому номер занят до `expires_at` последней заявки на него, закрыта она или нет (действующая заявка —
+        Локальная известная резервация отделена от доставки результата. Known-занятость держится до сохранённого known_busy_until, отдельно от public expires_at/закрытия доставки результата (действующая заявка —
         `pending` до `expires_at` или `verified` с неиспользованным результатом до 15 минут с подтверждения — отдельное
         понятие, от неё зависит повторная доставка результата). Запрос с новым ключом на занятый номер — 429 `RATE_LIMITED` без обращения к провайдеру и без
-        `verification_token` чужой заявки; `error.retry_at` — `expires_at` последней заявки, округлённый вверх до целой
+        `verification_token` чужой заявки; `error.retry_at` — сохранённый known_busy_until либо unknown deadline, округлённый вверх до целой
         минуты (22:16:20 → 22:17:00). Отказ провайдера по дублю при свободном по БД номере — тоже 429, `retry_at` =
-        время запроса + 5 минут, округлённое вверх до минуты. 429 на дубль сохраняется под ключом до своего
+        время запроса + 5 минут, округлённое вверх до минуты. Внешнее рассогласование (bare provider duplicate/
+        проверенный старый или чужой ID) — лог и существующая метрика finassist_phone_verification_provider_duplicate_total
+        без phone/IP/ID-меток; обычный DB429 до провайдера её не увеличивает. 429 на дубль сохраняется под ключом до своего
         `retry_at` (повтор с тем же ключом получает его с `Retry-After` от текущего момента, занятость не перепроверяется) и засчитывается в лимитах на
         номер и на адрес — один ключ не больше одного раза на окно до `retry_at`. 429 по лимиту не сохраняется и
         попытку не списывает.
@@ -194,6 +290,9 @@ paths:
               $ref: '#/components/schemas/StartPhoneVerificationRequest'
             example:
               phone: '+79001234567'
+              pd_consent_accepted: true
+              pd_consent_version: '2026-09-28'
+              age_confirmed: true
       responses:
         '200':
           description: Заявка создана
@@ -210,6 +309,10 @@ paths:
           $ref: '#/components/responses/RequestTooLarge'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
         '409':
           $ref: '#/components/responses/Conflict'
         '429':
@@ -230,6 +333,13 @@ paths:
         `expires_at`): переподключение с тем же токеном отдаёт те же токены. Заявка закрывается первым
         `/v1/auth/token` с выданным refresh или `/v1/auth/register`; после этого, после 15 минут с подтверждения и для
         `pending` — после `expires_at` — 401 `INVALID_TOKEN`.
+
+        Исключение внедрения FIN-363: после серверного момента переключения старый результат без
+        доказательства согласия/14+ больше не доставляется — INVALID_TOKEN. Пара access/refresh,
+        выпущенная и надёжно сохранённая до переключения, остаётся установленной сессией независимо
+        от первого RefreshTokens; её refresh только из-за отсутствия нового доказательства не отзывается.
+        Если Watch уже доставил такую пару, первый RefreshTokens работает как раньше. Сохранённую,
+        но ещё не доставленную пару старый Watch после переключения не возвращает (api.md 1.1).
 
         Лимит запросов (попыток подключения) за окно на адрес клиента, как у 1.3 и 1.4 (значение задаёт сервер;
         считаются и попытки, отклонённые по токену): сверх него — 429 `RATE_LIMITED` с
@@ -281,7 +391,9 @@ paths:
       x-min-request-body-bytes: 65536
       summary: Регистрация нового пользователя
       description: |
-        Вызывается с экрана согласия на обработку ПДн после подтверждения нового номера.
+        Вызывается после подтверждения нового номера с исходными подтверждениями из startPhoneVerification,
+        без повторного согласия. Версия сверяется с доказательством заявки, а не с обновлённым текущим
+        документом; момент получения согласия не меняется. Заявка без доказательства — INVALID_TOKEN.
         `registration_token` расходуется только ответом `201`; после ошибки 4xx его можно отправить снова
         (с новым `Idempotency-Key`, если тело изменилось). Повтор с тем же ключом возвращает тот же `201`.
         Лимит запросов на адрес клиента (значение задаёт сервер) проверяется до `registration_token`: сверх него —
@@ -421,8 +533,9 @@ paths:
       operationId: getConsentDocument
       summary: Текущая версия документа согласия
       description: |
-        `personal_data` — без токена (экран согласия до регистрации); `assistant` — с токеном.
-        Клиент не зашивает версию: после `CONSENT_OUTDATED` запрашивает документ заново.
+        `personal_data` — без токена (согласие до отправки телефона); `assistant` — с токеном.
+        Клиент не зашивает версию: после CONSENT_OUTDATED в startPhoneVerification/согласии помощнику
+        запрашивает документ заново. В Register восстанавливает исходную закреплённую версию заявки.
       security:
       - {}
       - bearerAuth: []
@@ -2566,6 +2679,9 @@ components:
       type: object
       required:
       - phone
+      - pd_consent_accepted
+      - pd_consent_version
+      - age_confirmed
       properties:
         phone:
           type: string
@@ -2573,6 +2689,17 @@ components:
             с нарушением у поля `phone` (`INVALID_FORMAT`), FIN-68.
           pattern: ^\+7\d{10}$
           example: '+79001234567'
+        pd_consent_accepted:
+          type: boolean
+          description: Отдельное согласие до передачи телефона провайдеру; false — 403 CONSENT_REQUIRED.
+        pd_consent_version:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Актуальная версия personal_data из getConsentDocument; несовпадение — 422 CONSENT_OUTDATED.
+        age_confirmed:
+          type: boolean
+          description: Отдельное подтверждение 14+; false — 400 VALIDATION_ERROR с полем age_confirmed, код REQUIRED.
     PhoneVerification:
       type: object
       required:
@@ -2593,9 +2720,10 @@ components:
         expires_at:
           type: string
           format: date-time
-          description: Срок жизни заявки по часам сервера; задаёт сервер (сейчас 5 минут с создания — срок заявки у
-            провайдера). Для отсчёта на устройстве клиент его не использует (см. `expires_in`) и длительность не
-            зашивает. После него — новая заявка с новым `Idempotency-Key`.
+          description: Наш консервативный deadline подтверждения по серверным часам. Для Zvonok provider.created
+            + fixed TTL 5 минут - ClockSkewTolerance 1s. Внутренняя known-busy граница = declared provider expiry
+            + tolerance, отдельно от public expires_at. Локальный адаптер может tolerance0 с теми же инвариантами.
+            Клиент считает по свежему expires_in, длительность не зашивает. После него — новая заявка с новым `Idempotency-Key`.
         expires_in:
           type: integer
           minimum: 0
@@ -2624,7 +2752,7 @@ components:
         is_new_user:
           type: boolean
           nullable: true
-          description: 'Только при `verified`: `true` — номера нет в системе, показать экран согласия и вызвать `register`.'
+          description: 'Только при `verified`: `true` — номера нет в системе, вызвать `register` без повторного согласия.'
         access_token:
           type: string
           nullable: true
@@ -2650,11 +2778,15 @@ components:
           description: Из события `verified`.
         pd_consent_accepted:
           type: boolean
-          description: Согласие на обработку ПДн; `false` → 403 `CONSENT_REQUIRED`.
+          description: Подтверждение ранее полученного в startPhoneVerification согласия; false — 403 CONSENT_REQUIRED.
+            Не заменяет доказательство заявки и не меняет его время.
         pd_consent_version:
           type: string
-          description: Версия документа (`getConsentDocument`, `personal_data`), который видел пользователь. Устаревшая →
-            422 `CONSENT_OUTDATED`.
+          minLength: 1
+          maxLength: 64
+          description: Исходная версия из startPhoneVerification; несовпадение с доказательством заявки —
+            422 CONSENT_OUTDATED. С новой текущей версией не сравнивается; клиент восстанавливает исходное
+            значение своей заявки, а при потере состояния начинает новую заявку.
         timezone:
           type: string
           description: Часовой пояс устройства (IANA); без поля — `Europe/Moscow`.
