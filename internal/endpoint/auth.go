@@ -18,14 +18,20 @@ type PhoneVerification struct {
 
 func (d Deps) startPhone(c *rest.Call) {
 	var in struct {
-		Phone string `json:"phone"`
+		Phone    string `json:"phone"`
+		Accepted bool   `json:"pd_consent_accepted"`
+		Version  string `json:"pd_consent_version"`
+		Age      bool   `json:"age_confirmed"`
 	}
 	if !decode(c, &in) {
 		return
 	}
 	ctx, cancel := unary(c)
 	defer cancel()
-	resp, err := d.Auth.StartPhoneVerification(ctx, &userv1.StartPhoneVerificationRequest{Phone: in.Phone})
+	// False assertions must reach USER after its idempotency/rate-limit gates.
+	// USER records receipt times and trusted IP before any provider effect.
+	resp, err := d.Auth.StartPhoneVerification(ctx, &userv1.StartPhoneVerificationRequest{Phone: in.Phone,
+		PdConsentAccepted: in.Accepted, PdConsentVersion: in.Version, AgeConfirmed: in.Age})
 	if err != nil {
 		c.Fail(err)
 		return

@@ -39,13 +39,15 @@ ENV=dev builds no public API (NewAssembly refuses dev): no auth bypass. Pre-stre
 JSON; streams extend their own connection deadlines and have their own deadline and caps.
 Add an infrastructure dependency only for a real endpoint/usecase; no dummy code for coverage.
 
-Current tagged contracts/gen/go is v0.6.0 (FIN-367/FIN-368). FIN-342 REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
+Current tagged contracts/gen/go is v0.7.0 (FIN-363, merged 928bac0). FIN-342 REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
 the declared safety of the entire REST operation; an unknown keyed POST replay window stays false.
 Do not infer permission from an error code, HTTP status, RetryInfo, text or UUID. Nested result Status
 is decoded only by finerr.DecodeResultStatus: valid canonical reason wins, present-invalid never reads
 legacy code, absent uses the legacy adapter. Result retryable is the service's separate new-attempt
 permission, including false. Do not detect assistant capability from legacy text or proto3 bool.
 Rollout/rollback prerequisites are in docs/config.md; import routes use STATEMENTS_GRPC_ADDR and six StatementsService RPCs.
+
+FIN-364: all four StartPhoneVerification REST fields are structurally required; copy consent/version/age assertions exactly to RPC. False booleans and outdated nonempty versions are USER policy after key/rate-limit gates, never local true checks before RPC. Receipt timestamps, account binding and provider calls are USER-owned. Only the existing trusted-proxy-derived x-client-ip is receipt metadata; never forward arbitrary HTTP X-Client-IP, client clocks or user agent. Register passes its original receipt assertions without fetching the current document. No hidden Start RPC retry or BFF receipt cache; all POST retryable remains conservatively false without proof of the key window.
 
 ## Security
 

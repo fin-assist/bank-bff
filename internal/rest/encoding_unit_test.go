@@ -60,7 +60,7 @@ func (b *encodingReadSpy) Read(p []byte) (int, error) { b.reads++; return b.Read
 func (b *encodingReadSpy) Close() error               { b.closes++; _, err := io.Copy(io.Discard, b); return err }
 
 var encodingJSONRoutes = []struct{ method, path, body string }{
-	{"POST", "/v1/auth/phone", `{"phone":"+79001234567"}`},
+	{"POST", "/v1/auth/phone", `{"phone":"+79001234567","pd_consent_accepted":true,"pd_consent_version":"v","age_confirmed":true}`},
 	{"POST", "/v1/auth/register", `{"registration_token":"rt","pd_consent_accepted":true,"pd_consent_version":"v"}`},
 	{"POST", "/v1/auth/token", `{"refresh_token":"rt"}`},
 	{"POST", "/v1/auth/logout", `{"refresh_token":"rt"}`},
