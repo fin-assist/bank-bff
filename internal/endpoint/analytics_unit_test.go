@@ -216,7 +216,7 @@ func TestUnitAnalyticsIncompleteServiceResponsesFailClosed(t *testing.T) {
 	}
 	for _, tc := range incompletePeriodCases() {
 		u := newUnitAPI(t, rest.StreamLimits{})
-		in := &analyticsv1.PeriodItem{Key: "2026", Range: analyticsFixture().Period.Range}
+		in := &analyticsv1.PeriodItem{Key: "2026-09", Range: analyticsFixture().Period.Range}
 		tc.mutate(in)
 		u.f.analyticsList = func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
 			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{in}}, nil
@@ -294,13 +294,20 @@ func TestUnitAnalyticsCalendarKeys(t *testing.T) {
 		u := newUnitAPI(t, rest.StreamLimits{})
 		in := analyticsFixture()
 		in.Params.PeriodKey = key
+		period := "year"
+		if strings.Contains(key, "-Q") {
+			period = "quarter"
+		} else if strings.Contains(key, "-") {
+			period = "month"
+		}
+		in.Params.Period, _ = periodType(period)
 		in.Navigation = &analyticsv1.Navigation{Previous: proto.String(key), Next: proto.String(key)}
 		u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return in, nil }
 		u.f.analyticsList = func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
 			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: key, Range: in.Period.Range}}}, nil
 		}
 		for _, path := range []string{"/v1/analytics", "/v1/analytics/periods"} {
-			if r := u.serve(t, "GET", path, "", nil); r.Code != 200 {
+			if r := u.serve(t, "GET", path+"?period="+period, "", nil); r.Code != 200 {
 				t.Fatal(key, r.Code, r.Body.String())
 			}
 		}
