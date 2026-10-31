@@ -149,4 +149,32 @@ func TestAPIRollingErrorsAndEmptyResponses(t *testing.T) {
 	if r := b.do(t, request{method: "GET", path: "/v1/analytics?period=rolling_year", route: "/v1/analytics", header: auth}); r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" {
 		t.Fatal(r.StatusCode, string(r.body))
 	}
+	for _, period := range []commonv1.PeriodType{commonv1.PeriodType_PERIOD_TYPE_ROLLING_YEAR, commonv1.PeriodType_PERIOD_TYPE_ROLLING_QUARTER} {
+		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+				return rollingAPIMessage(t, period), nil
+			}
+		})
+		for _, query := range []string{"", "?period=month", "?period=all_time"} {
+			if r := b.do(t, request{method: "GET", path: "/v1/analytics" + query, route: "/v1/analytics", header: auth}); r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" {
+				t.Fatal(query, period, r.StatusCode, string(r.body))
+			}
+		}
+	}
+	for _, previous := range []bool{false, true} {
+		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+				r := rollingAPIMessage(t, commonv1.PeriodType_PERIOD_TYPE_ROLLING_YEAR)
+				if previous {
+					r.Navigation.Previous = proto.String("2025")
+				} else {
+					r.Navigation.Next = proto.String("2027")
+				}
+				return r, nil
+			}
+		})
+		if r := b.do(t, request{method: "GET", path: "/v1/analytics?period=rolling_year", route: "/v1/analytics", header: auth}); r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" {
+			t.Fatal(previous, r.StatusCode, string(r.body))
+		}
+	}
 }

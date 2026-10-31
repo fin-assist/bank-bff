@@ -54,7 +54,7 @@ func TestIntegrationRollingTransportAndOpaqueBlocks(t *testing.T) {
 				cancel()
 				t.Fatal(err)
 			}
-			out, ok := c.analytics(wire)
+			out, ok := c.analytics(wire, period)
 			if !ok || out.Params.Period != key || out.Params.Date != key || out.Period.IsCurrent || out.Navigation.Next != nil || out.Navigation.Previous != nil {
 				cancel()
 				t.Fatal(out, ok)

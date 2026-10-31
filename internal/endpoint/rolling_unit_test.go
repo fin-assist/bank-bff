@@ -92,6 +92,7 @@ func TestUnitRollingMalformedProducerAndEmpty(t *testing.T) {
 			r.Params.PeriodKey = "2026-10"
 		},
 		func(r *analyticsv1.GetAnalyticsResponse) { r.Navigation.Next = proto.String("2027") },
+		func(r *analyticsv1.GetAnalyticsResponse) { r.Navigation.Previous = proto.String("2025") },
 	} {
 		fixture := rollingFixture(commonv1.PeriodType_PERIOD_TYPE_ROLLING_YEAR)
 		mutate(fixture)
@@ -111,6 +112,49 @@ func TestUnitRollingMalformedProducerAndEmpty(t *testing.T) {
 	}
 	if r := u.serve(t, "GET", "/v1/analytics/periods?period=rolling_year", "", nil); r.Code != 500 {
 		t.Fatal(r.Code, r.Body.String())
+	}
+}
+
+func TestUnitRollingResponseMismatchCountsRequiredFields(t *testing.T) {
+	for _, absent := range []bool{false, true} {
+		u := newUnitAPI(t, rest.StreamLimits{})
+		fixture := analyticsFixture()
+		fixture.Currency = ""
+		fixture.Blocks = []*commonv1.Block{{Type: "text", V: 1, Lock: &commonv1.BlockLock{Reason: "unknown"}}}
+		field, code := "GetAnalyticsResponse.params.period", "invalid"
+		if absent {
+			fixture.Params = nil
+			field, code = "GetAnalyticsResponse.params", "absent"
+		}
+		u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return fixture, nil }
+		if r := u.serve(t, "GET", "/v1/analytics?period=rolling_year", "", nil); r.Code != 500 {
+			t.Fatal(r.Code, r.Body.String())
+		}
+		for _, required := range []string{"GetAnalyticsResponse.currency", "Block.lock.text"} {
+			if !gathered(t, u, "finassist_empty_required_field_total", required, 1) {
+				t.Fatal("required field not counted before rejecting response", required)
+			}
+		}
+		if allTimeTranslationCount(t, u.reg, field, code) != 1 {
+			t.Fatal("wrong response diagnostic", field, code)
+		}
+		if absent && allTimeTranslationCount(t, u.reg, "GetAnalyticsResponse.params.period", "invalid") != 0 {
+			t.Fatal("missing params diagnosed as mismatched period")
+		}
+	}
+}
+
+func TestUnitRollingResponseRejectedForOtherRequestedPeriods(t *testing.T) {
+	for _, period := range []commonv1.PeriodType{commonv1.PeriodType_PERIOD_TYPE_ROLLING_YEAR, commonv1.PeriodType_PERIOD_TYPE_ROLLING_QUARTER} {
+		for _, query := range []string{"", "?period=month", "?period=quarter", "?period=year", "?period=all_time"} {
+			u := newUnitAPI(t, rest.StreamLimits{})
+			u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+				return rollingFixture(period), nil
+			}
+			if r := u.serve(t, "GET", "/v1/analytics"+query, "", nil); r.Code != 500 || r.code() != "INTERNAL_ERROR" {
+				t.Fatal(query, period, r.Code, r.Body.String())
+			}
+		}
 	}
 }
 

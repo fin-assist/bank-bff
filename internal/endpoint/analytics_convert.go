@@ -125,7 +125,7 @@ func (c converter) analyticsBlock(b *commonv1.Block) analyticsBlock {
 	return out
 }
 
-func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsResponse, bool) {
+func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse, requestedPeriod commonv1.PeriodType) (analyticsResponse, bool) {
 	out := analyticsResponse{HasData: resp.GetHasData()}
 	if !out.HasData {
 		return out, true
@@ -144,6 +144,9 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 	}
 	if _, ok := enumCode(pms.GetPeriod()); !ok {
 		return c.analyticsInvalid("GetAnalyticsResponse.params.period", "unknown")
+	}
+	if (rollingPeriod(requestedPeriod) || rollingPeriod(pms.GetPeriod())) && pms.GetPeriod() != requestedPeriod {
+		return c.analyticsInvalid("GetAnalyticsResponse.params.period", "invalid")
 	}
 	if !c.analyticsPeriodKey(pms.GetPeriod(), pms.GetPeriodKey(), "GetAnalyticsResponse.params.period_key") {
 		return analyticsResponse{}, false

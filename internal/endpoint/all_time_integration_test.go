@@ -61,7 +61,7 @@ func TestIntegrationAllTimeTransportAndComposition(t *testing.T) {
 			cancel()
 			t.Fatal(err)
 		}
-		out, ok := c.analytics(wire)
+		out, ok := c.analytics(wire, commonv1.PeriodType_PERIOD_TYPE_ALL_TIME)
 		if !ok || out.Params.Period != "all_time" || out.Params.Date != "all_time" || out.Period.IsCurrent || out.Navigation.Previous != nil || out.Navigation.Next != nil || out.Period.Range.From != "2025-10-31T00:00:00+03:00" {
 			cancel()
 			t.Fatal(out, ok)
@@ -91,7 +91,7 @@ func TestIntegrationAllTimeTransportAndComposition(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, ok := c.analytics(wire)
+		out, ok := c.analytics(wire, commonv1.PeriodType_PERIOD_TYPE_ALL_TIME)
 		if !ok || (*out.Blocks)[0].Action.Date != nil {
 			t.Fatal(out, ok)
 		}
@@ -111,7 +111,7 @@ func TestIntegrationAllTimeTransportAndComposition(t *testing.T) {
 			t.Fatal(err)
 		}
 		before := allTimeTranslationCount(t, reg, "Block.action.period", "unknown")
-		out, ok := c.analytics(wire)
+		out, ok := c.analytics(wire, commonv1.PeriodType_PERIOD_TYPE_ALL_TIME)
 		if !ok || (*out.Blocks)[0].Action.Period != nil || (*out.Blocks)[0].Action.Date == nil || *(*out.Blocks)[0].Action.Date != "2026-10" {
 			t.Fatal(out, ok)
 		}
@@ -137,7 +137,7 @@ func TestIntegrationAllTimeTransportAndComposition(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := c.analytics(wire); ok {
+		if _, ok := c.analytics(wire, tc.period); ok {
 			t.Fatal("crossed calendar response accepted", wire)
 		}
 	}

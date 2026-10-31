@@ -85,12 +85,7 @@ func (d Deps) analytics(c *rest.Call) {
 		return
 	}
 	conv := converter{loc: zone(resp.GetTimeZone()), metrics: c.Metrics}
-	if resp.GetHasData() && (rollingPeriod(period) || rollingPeriod(resp.GetParams().GetPeriod())) && resp.GetParams().GetPeriod() != period {
-		conv.metrics.Untranslated("GetAnalyticsResponse.params.period", "invalid")
-		rest.Internal().Write(c.W)
-		return
-	}
-	out, ok := conv.analytics(resp)
+	out, ok := conv.analytics(resp, period)
 	if !ok {
 		rest.Internal().Write(c.W)
 		return
