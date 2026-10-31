@@ -2,6 +2,11 @@ package endpoint
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -25,7 +30,8 @@ func TestIntegrationAllTimeTransportAndComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	metrics, err := rest.NewMetrics(prometheus.NewRegistry())
+	reg := prometheus.NewRegistry()
+	metrics, err := rest.NewMetrics(reg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,17 +96,43 @@ func TestIntegrationAllTimeTransportAndComposition(t *testing.T) {
 			t.Fatal(out, ok)
 		}
 	}
-	for _, period := range []commonv1.PeriodType{1, 2, 3} {
+	for _, period := range []*commonv1.PeriodType{nil, commonv1.PeriodType_PERIOD_TYPE_UNSPECIFIED.Enum(), commonv1.PeriodType(99).Enum()} {
 		fixture := allTimeMessage()
-		fixture.Params.Period = period
-		fixture.Params.PeriodKey = map[commonv1.PeriodType]string{1: "2026", 2: "2026-10", 3: "2026-Q4"}[period]
+		fixture.Blocks[0].Action = &commonv1.BlockAction{Type: "select_analytics_period", Period: period, PeriodKey: proto.String("2026-10")}
 		peers.Analytics.Set(func(a *testpeer.Analytics) {
 			a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
 				return fixture, nil
 			}
 		})
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-		wire, err := client.GetAnalytics(ctx, &analyticsv1.GetAnalyticsRequest{Period: period})
+		wire, err := client.GetAnalytics(ctx, &analyticsv1.GetAnalyticsRequest{Period: commonv1.PeriodType_PERIOD_TYPE_ALL_TIME})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := allTimeTranslationCount(t, reg, "Block.action.period", "unknown")
+		out, ok := c.analytics(wire)
+		if !ok || (*out.Blocks)[0].Action.Period != nil || (*out.Blocks)[0].Action.Date == nil || *(*out.Blocks)[0].Action.Date != "2026-10" {
+			t.Fatal(out, ok)
+		}
+		want := before
+		if period != nil {
+			want++
+		}
+		if allTimeTranslationCount(t, reg, "Block.action.period", "unknown") != want {
+			t.Fatal("optional period diagnostic changed", period)
+		}
+	}
+	for _, tc := range mismatchedPeriodKeys() {
+		fixture := allTimeMessage()
+		fixture.Params.Period, fixture.Params.PeriodKey = tc.period, tc.key
+		peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+				return fixture, nil
+			}
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		wire, err := client.GetAnalytics(ctx, &analyticsv1.GetAnalyticsRequest{Period: tc.period})
 		cancel()
 		if err != nil {
 			t.Fatal(err)
@@ -127,5 +159,59 @@ func TestIntegrationAllTimeTransportAndComposition(t *testing.T) {
 	chips := c.chips(message.GetChips())
 	if len(chips) != 1 || chips[0].Params.Period != "quarter" || message.GetText() != "Синтетический ответ" {
 		t.Fatal(chips, message)
+	}
+}
+
+// This component integration binds HTTP and composes the endpoint with the real
+// gRPC transport; it does not construct the full public BFF assembly.
+func TestIntegrationListPeriodsRejectsKeysOfOtherPeriodTypes(t *testing.T) {
+	peers := testpeer.Start(t, testpeer.NewKeys(t), testpeer.NewStageFiles(t))
+	conn, err := grpc.NewClient(testpeer.Target, peers.DialOptions()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	reg := prometheus.NewRegistry()
+	metrics, err := rest.NewMetrics(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{Analytics: analyticsv1.NewAnalyticsServiceClient(conn)}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deps.analyticsPeriods(&rest.Call{W: w, R: r, Metrics: metrics, Log: slog.New(slog.DiscardHandler)})
+	}))
+	t.Cleanup(server.Close)
+	client := &http.Client{Timeout: 5 * time.Second}
+	for _, tc := range mismatchedPeriodKeys() {
+		peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.ListFunc = func(_ context.Context, in *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
+				if in.GetPeriod() != tc.period {
+					t.Error(in)
+				}
+				return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: tc.key, Range: allTimeMessage().Period.Range}}}, nil
+			}
+		})
+		period, _ := enumCode(tc.period)
+		req, err := http.NewRequestWithContext(t.Context(), "GET", server.URL+"/v1/analytics/periods?period="+period, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := allTimeTranslationCount(t, reg, "ListPeriodsResponse.periods.key", "invalid")
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct{ Error struct{ Code string } }
+		if err := json.Unmarshal(data, &body); err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != 500 || body.Error.Code != "INTERNAL_ERROR" || allTimeTranslationCount(t, reg, "ListPeriodsResponse.periods.key", "invalid") != before+1 {
+			t.Fatal(tc, response.StatusCode, string(data))
+		}
 	}
 }

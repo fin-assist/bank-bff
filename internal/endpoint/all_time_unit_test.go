@@ -25,7 +25,7 @@ func allTimeMessage() *analyticsv1.GetAnalyticsResponse {
 	out.Params.Period, out.Params.PeriodKey = commonv1.PeriodType_PERIOD_TYPE_ALL_TIME, "all_time"
 	out.Period.Range = &commonv1.TimeRange{Start: from, End: to}
 	out.Period.IsCurrent = false
-	out.Period.Bounds = &commonv1.DataBounds{Coverage: commonv1.Coverage_COVERAGE_COMPLETE, DataFrom: from, DataTo: to}
+	out.Period.Bounds = &commonv1.DataBounds{Coverage: commonv1.Coverage_COVERAGE_COMPLETE, DataFrom: from, DataTo: timestamppb.New(to.AsTime().Add(-time.Nanosecond))}
 	out.Navigation = &analyticsv1.Navigation{}
 	out.State.DataFrom, out.State.DataTo = from, to
 	data, _ := structpb.NewStruct(map[string]any{"groups": []any{map[string]any{"tiles": []any{
@@ -136,10 +136,18 @@ func TestUnitAssistantSkipsUnsupportedAnalyticsChips(t *testing.T) {
 		key    string
 		valid  bool
 	}{
-		{1, "2026-10", true}, {2, "2026-Q4", true}, {3, "2026", true},
-		{4, "all_time", false}, {4, "2026", false}, {1, "all_time", false},
-		{1, "2026-13", false}, {1, "2026", false}, {2, "2026-10", false},
-		{3, "2026-Q4", false}, {0, "2026", false}, {99, "2026", false},
+		{commonv1.PeriodType_PERIOD_TYPE_MONTH, "2026-10", true},
+		{commonv1.PeriodType_PERIOD_TYPE_QUARTER, "2026-Q4", true},
+		{commonv1.PeriodType_PERIOD_TYPE_YEAR, "2026", true},
+		{commonv1.PeriodType_PERIOD_TYPE_ALL_TIME, "all_time", false},
+		{commonv1.PeriodType_PERIOD_TYPE_ALL_TIME, "2026", false},
+		{commonv1.PeriodType_PERIOD_TYPE_MONTH, "all_time", false},
+		{commonv1.PeriodType_PERIOD_TYPE_MONTH, "2026-13", false},
+		{commonv1.PeriodType_PERIOD_TYPE_MONTH, "2026", false},
+		{commonv1.PeriodType_PERIOD_TYPE_QUARTER, "2026-10", false},
+		{commonv1.PeriodType_PERIOD_TYPE_YEAR, "2026-Q4", false},
+		{commonv1.PeriodType_PERIOD_TYPE_UNSPECIFIED, "2026", false},
+		{commonv1.PeriodType(99), "2026", false},
 	} {
 		chip := &assistantv1.Chip{Label: "Синтетический переход", Screen: assistantv1.ChipScreen_CHIP_SCREEN_ANALYTICS, Params: &commonv1.AnalyticsParams{Period: tc.period, PeriodKey: tc.key}}
 		out := c.chips([]*assistantv1.Chip{chip, {Label: "Операции", Screen: assistantv1.ChipScreen_CHIP_SCREEN_OPERATIONS, Filters: &commonv1.OperationsFilter{Q: proto.String("synthetic")}}})
@@ -171,13 +179,94 @@ func TestUnitOptionalActionDropsInvalidKeysAndResponseKeysMatchTheirType(t *test
 	if !gathered(t, u, "finassist_untranslated_code_total", "Block.action.period_key", 3) {
 		t.Fatal("invalid optional targets were not counted")
 	}
-	for _, period := range []commonv1.PeriodType{commonv1.PeriodType_PERIOD_TYPE_MONTH, commonv1.PeriodType_PERIOD_TYPE_QUARTER, commonv1.PeriodType_PERIOD_TYPE_YEAR} {
+	for _, tc := range mismatchedPeriodKeys() {
 		fixture := allTimeMessage()
-		fixture.Params.Period = period
-		fixture.Params.PeriodKey = map[commonv1.PeriodType]string{1: "2026", 2: "2026-10", 3: "2026-Q4"}[period]
+		fixture.Params.Period, fixture.Params.PeriodKey = tc.period, tc.key
 		u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return fixture, nil }
 		if r := u.serve(t, "GET", "/v1/analytics", "", nil); r.Code != 500 {
-			t.Fatal(period, r.Code, r.Body.String())
+			t.Fatal(tc, r.Code, r.Body.String())
+		}
+	}
+}
+
+// Each key is well formed but incompatible with the requested calendar type.
+func mismatchedPeriodKeys() []struct {
+	period commonv1.PeriodType
+	key    string
+} {
+	return []struct {
+		period commonv1.PeriodType
+		key    string
+	}{
+		{commonv1.PeriodType_PERIOD_TYPE_MONTH, "2026"},
+		{commonv1.PeriodType_PERIOD_TYPE_QUARTER, "2026-10"},
+		{commonv1.PeriodType_PERIOD_TYPE_YEAR, "2026-Q4"},
+		{commonv1.PeriodType_PERIOD_TYPE_MONTH, "all_time"},
+	}
+}
+
+func allTimeTranslationCount(t *testing.T, reg *prometheus.Registry, field, code string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "finassist_untranslated_code_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := map[string]string{}
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["field"] == field && labels["code"] == code {
+				return metric.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
+}
+
+func TestUnitListPeriodsRejectsKeysOfOtherPeriodTypes(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	for _, tc := range mismatchedPeriodKeys() {
+		period, _ := enumCode(tc.period)
+		u.f.analyticsList = func(in *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
+			if in.GetPeriod() != tc.period {
+				t.Error(in)
+			}
+			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: tc.key, Range: allTimeMessage().Period.Range}}}, nil
+		}
+		before := allTimeTranslationCount(t, u.reg, "ListPeriodsResponse.periods.key", "invalid")
+		r := u.serve(t, "GET", "/v1/analytics/periods?period="+period, "", nil)
+		if r.Code != 500 || r.code() != "INTERNAL_ERROR" || allTimeTranslationCount(t, u.reg, "ListPeriodsResponse.periods.key", "invalid") != before+1 {
+			t.Fatal(tc, r.Code, r.Body.String())
+		}
+	}
+}
+
+func TestUnitOptionalActionUnknownPeriodIsCountedOnlyWhenPresent(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	for _, period := range []*commonv1.PeriodType{nil, commonv1.PeriodType_PERIOD_TYPE_UNSPECIFIED.Enum(), commonv1.PeriodType(99).Enum()} {
+		fixture := allTimeMessage()
+		fixture.Blocks[0].Action = &commonv1.BlockAction{Type: "select_analytics_period", Period: period, PeriodKey: proto.String("2026-10")}
+		u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return fixture, nil }
+		before := allTimeTranslationCount(t, u.reg, "Block.action.period", "unknown")
+		r := u.serve(t, "GET", "/v1/analytics?period=all_time", "", nil)
+		if r.Code != 200 {
+			t.Fatal(r.Code, r.Body.String())
+		}
+		action := r.json["blocks"].([]any)[0].(map[string]any)["action"].(map[string]any)
+		if _, exists := action["period"]; exists || action["date"] != "2026-10" {
+			t.Fatal(action)
+		}
+		want := before
+		if period != nil {
+			want++
+		}
+		if allTimeTranslationCount(t, u.reg, "Block.action.period", "unknown") != want {
+			t.Fatal("optional period diagnostic changed", period)
 		}
 	}
 }

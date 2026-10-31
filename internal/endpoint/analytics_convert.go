@@ -117,6 +117,8 @@ func (c converter) analyticsBlock(b *commonv1.Block) analyticsBlock {
 		if a.Period != nil {
 			if period, ok := enumCode(a.GetPeriod()); ok {
 				out.Action.Period = &period
+			} else {
+				c.metrics.Untranslated("Block.action.period", "unknown")
 			}
 		}
 	}

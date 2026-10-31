@@ -31,7 +31,7 @@ func allTimeAPIMessage(t *testing.T) *analyticsv1.GetAnalyticsResponse {
 	out.Params.Period, out.Params.PeriodKey = commonv1.PeriodType_PERIOD_TYPE_ALL_TIME, "all_time"
 	out.Period.Range = &commonv1.TimeRange{Start: from, End: to}
 	out.Period.IsCurrent = false
-	out.Period.Bounds = &commonv1.DataBounds{Coverage: commonv1.Coverage_COVERAGE_COMPLETE, DataFrom: from, DataTo: to}
+	out.Period.Bounds = &commonv1.DataBounds{Coverage: commonv1.Coverage_COVERAGE_COMPLETE, DataFrom: from, DataTo: timestamppb.New(to.AsTime().Add(-time.Nanosecond))}
 	out.State.DataFrom, out.State.DataTo = from, to
 	out.Navigation = &analyticsv1.Navigation{}
 	groups, err := structpb.NewStruct(map[string]any{"groups": []any{map[string]any{"tiles": []any{
@@ -237,6 +237,65 @@ func TestAPIAllTimeEmptyAndCanonicalValidation(t *testing.T) {
 		r = b.do(t, request{method: "GET", path: "/v1/analytics?period=all_time", route: "/v1/analytics", header: auth})
 		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" {
 			t.Fatal(tc, r.StatusCode, string(r.body))
+		}
+	}
+}
+
+func TestAPIListPeriodsRejectsKeysOfOtherPeriodTypes(t *testing.T) {
+	b := startBFF(t, nil)
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	for _, tc := range []struct {
+		period commonv1.PeriodType
+		code   string
+		key    string
+	}{
+		{commonv1.PeriodType_PERIOD_TYPE_MONTH, "month", "2026"},
+		{commonv1.PeriodType_PERIOD_TYPE_QUARTER, "quarter", "2026-10"},
+		{commonv1.PeriodType_PERIOD_TYPE_YEAR, "year", "2026-Q4"},
+		{commonv1.PeriodType_PERIOD_TYPE_MONTH, "month", "all_time"},
+	} {
+		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.ListFunc = func(_ context.Context, in *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
+				if in.GetPeriod() != tc.period {
+					t.Error(in)
+				}
+				return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: tc.key, Range: allTimeAPIMessage(t).Period.Range}}}, nil
+			}
+		})
+		before := b.analyticsCounter(t, "finassist_untranslated_code_total", "ListPeriodsResponse.periods.key", "invalid")
+		r := b.do(t, request{method: "GET", path: "/v1/analytics/periods?period=" + tc.code, route: "/v1/analytics/periods", header: auth})
+		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || b.analyticsCounter(t, "finassist_untranslated_code_total", "ListPeriodsResponse.periods.key", "invalid") != before+1 {
+			t.Fatal(tc, r.StatusCode, string(r.body))
+		}
+	}
+}
+
+func TestAPIOptionalActionUnknownPeriodIsCountedOnlyWhenPresent(t *testing.T) {
+	b := startBFF(t, nil)
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	for _, period := range []*commonv1.PeriodType{nil, commonv1.PeriodType_PERIOD_TYPE_UNSPECIFIED.Enum(), commonv1.PeriodType(99).Enum()} {
+		fixture := allTimeAPIMessage(t)
+		fixture.Blocks[0].Action = &commonv1.BlockAction{Type: "select_analytics_period", Period: period, PeriodKey: proto.String("2026-10")}
+		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+				return fixture, nil
+			}
+		})
+		before := b.analyticsCounter(t, "finassist_untranslated_code_total", "Block.action.period", "unknown")
+		r := b.do(t, request{method: "GET", path: "/v1/analytics?period=all_time", route: "/v1/analytics", header: auth})
+		if r.StatusCode != 200 {
+			t.Fatal(r.StatusCode, string(r.body))
+		}
+		action := r.json["blocks"].([]any)[0].(map[string]any)["action"].(map[string]any)
+		if _, exists := action["period"]; exists || action["date"] != "2026-10" {
+			t.Fatal(action)
+		}
+		want := before
+		if period != nil {
+			want++
+		}
+		if b.analyticsCounter(t, "finassist_untranslated_code_total", "Block.action.period", "unknown") != want {
+			t.Fatal("optional period diagnostic changed", period)
 		}
 	}
 }
