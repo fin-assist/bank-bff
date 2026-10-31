@@ -1,5 +1,7 @@
 # Проверки bank-bff
 
+FIN-400: `endpoint/all_time_unit_test.go` проверяет оба режима, ключ/диапазон всей истории, безопасный отказ при смешанных ответных ключах, необязательные поля действия и фильтрацию неподдерживаемых analytics-чипов. `TestIntegrationAllTimeTransportAndComposition` независимо собирает реальный protobuf/gRPC transport и mapper. Новые `TestAPIAllTime…` поднимают полный BFF: реальные HTTP/SSE, bufconn-соседи и проверка OpenAPI; покрыты singleton/пустота, оба режима, отсутствие подмены пользователя, канонический `date`/`INVALID_FORMAT`, malformed producer и фильтрация чипов в истории/snapshot/event без потери ответа. Новые сценарии не добавляются в прежнюю общую integration/API-таблицу.
+
 В FIN-368/FIN-339 новые полные публичные сценарии актуальности history/snapshot/source и Content-Encoding выполняются только как `TestAPI…` на `app.Run`. Их independent integration собирают компоненты отдельно: реальный gRPC-сосед → source mapper; настоящий HTTP listener → rest pipeline с JWT identity → probe RPC. Полная публичная API-сборка не переименовывается в integration для нового поведения.
 
 FIN-261 перенёс инфраструктуру HTTP BFF из go-service-template с независимыми gates FIN-238; FIN-268 добавил публичный API. Все три набора инструментируют одинаковый весь production-модуль (`-coverpkg=./...`), без исключений. Каждый требует total80 statements через закреплённый `go-test-coverage v2.20.1`; принятое округление 79,95% → 80,0%. Combined — справочное объединение штатным инструментом, не компенсация провала уровня.

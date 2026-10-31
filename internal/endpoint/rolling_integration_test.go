@@ -66,7 +66,7 @@ func TestIntegrationRollingTransportAndOpaqueBlocks(t *testing.T) {
 			}
 			page, err := client.ListPeriods(ctx, &analyticsv1.ListPeriodsRequest{Period: period})
 			cancel()
-			if err != nil || len(page.GetPeriods()) != 1 || !c.analyticsResponseKey(period, page.GetPeriods()[0].GetKey(), "ListPeriodsResponse.periods.key") {
+			if err != nil || len(page.GetPeriods()) != 1 || !c.analyticsPeriodKey(period, page.GetPeriods()[0].GetKey(), "ListPeriodsResponse.periods.key") {
 				t.Fatal(page, err)
 			}
 		}

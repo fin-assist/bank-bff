@@ -117,8 +117,8 @@ func TestUnitRollingMalformedProducerAndEmpty(t *testing.T) {
 func TestUnitRollingChipsRemainCalendarOnly(t *testing.T) {
 	u := newUnitAPI(t, rest.StreamLimits{})
 	c := converter{metrics: u.metrics}
-	if c.analyticsResponseKey(commonv1.PeriodType_PERIOD_TYPE_ALL_TIME, "2026", "GetAnalyticsResponse.params.period_key") {
-		t.Fatal("a newly generated enum enabled an unsupported response")
+	if c.analyticsPeriodKey(commonv1.PeriodType_PERIOD_TYPE_ALL_TIME, "2026", "GetAnalyticsResponse.params.period_key") {
+		t.Fatal("a singleton accepted a calendar response key")
 	}
 	for _, key := range []string{"2026-10", "2026-Q4", "2026", "rolling_year", "rolling_quarter", "all_time", "", "2026-13"} {
 		out := c.analyticsBlock(&commonv1.Block{Action: &commonv1.BlockAction{Type: "select_analytics_period", PeriodKey: &key}})

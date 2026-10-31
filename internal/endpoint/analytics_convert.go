@@ -107,18 +107,18 @@ func (c converter) analyticsBlock(b *commonv1.Block) analyticsBlock {
 	}
 	if a := b.GetAction(); a != nil {
 		out.Action = &analyticsAction{Type: a.GetType(), Filter: operationsFilter(a.Filter, c.loc), PaymentID: a.PaymentId, Label: a.Label}
-		if a.Period != nil {
-			if code, ok := enumCode(a.GetPeriod()); ok {
-				out.Action.Period = &code
-			} else {
-				c.metrics.Untranslated("Block.action.period", "unknown")
-			}
-		}
-		if key := a.GetPeriodKey(); a.PeriodKey != nil {
-			if analyticsKeyShape.MatchString(key) || key == "all_time" || key == "rolling_year" || key == "rolling_quarter" {
-				out.Action.Date = &key
+		if key := a.PeriodKey; key != nil {
+			if *key == "all_time" || *key == "rolling_year" || *key == "rolling_quarter" || analyticsKeyShape.MatchString(*key) {
+				out.Action.Date = key
 			} else {
 				c.metrics.Untranslated("Block.action.period_key", "invalid")
+			}
+		}
+		if a.Period != nil {
+			if period, ok := enumCode(a.GetPeriod()); ok {
+				out.Action.Period = &period
+			} else {
+				c.metrics.Untranslated("Block.action.period", "unknown")
 			}
 		}
 	}
@@ -145,7 +145,7 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 	if _, ok := enumCode(pms.GetPeriod()); !ok {
 		return c.analyticsInvalid("GetAnalyticsResponse.params.period", "unknown")
 	}
-	if !c.analyticsResponseKey(pms.GetPeriod(), pms.GetPeriodKey(), "GetAnalyticsResponse.params.period_key") {
+	if !c.analyticsPeriodKey(pms.GetPeriod(), pms.GetPeriodKey(), "GetAnalyticsResponse.params.period_key") {
 		return analyticsResponse{}, false
 	}
 	out.Params, _ = analyticsParams(pms)
@@ -247,49 +247,35 @@ func (c converter) analyticsRange(value *commonv1.TimeRange, field string) bool 
 // analyticsKeyShape is PeriodKey from the embedded OpenAPI. These are calendar
 // labels, never instants; validating syntax does not convert or choose a period.
 var analyticsKeyShape = regexp.MustCompile(`^[0-9]{4}(-(0[1-9]|1[0-2])|-Q[1-4])?$`)
+var analyticsMonthKey = regexp.MustCompile(`^[0-9]{4}-(0[1-9]|1[0-2])$`)
+var analyticsQuarterKey = regexp.MustCompile(`^[0-9]{4}-Q[1-4]$`)
+var analyticsYearKey = regexp.MustCompile(`^[0-9]{4}$`)
 
-func rollingPeriod(period commonv1.PeriodType) bool {
-	return period == commonv1.PeriodType_PERIOD_TYPE_ROLLING_YEAR || period == commonv1.PeriodType_PERIOD_TYPE_ROLLING_QUARTER
-}
-
-func (c converter) analyticsResponseKey(period commonv1.PeriodType, key, field string) bool {
-	if rollingPeriod(period) {
-		code, _ := enumCode(period)
-		if key != code {
-			c.metrics.Untranslated(field, "invalid")
-			return false
-		}
-		return true
-	}
-	if period != commonv1.PeriodType_PERIOD_TYPE_MONTH && period != commonv1.PeriodType_PERIOD_TYPE_QUARTER && period != commonv1.PeriodType_PERIOD_TYPE_YEAR {
-		c.metrics.Untranslated(field, "invalid")
-		return false
-	}
-	return c.analyticsPeriodKey(key, field)
-}
-
-func calendarAnalyticsKey(period commonv1.PeriodType, key string) bool {
-	if !analyticsKeyShape.MatchString(key) {
-		return false
-	}
+func analyticsKeyMatches(period commonv1.PeriodType, value string) bool {
 	switch period {
 	case commonv1.PeriodType_PERIOD_TYPE_MONTH:
-		return len(key) == 7 && key[5] != 'Q'
+		return analyticsMonthKey.MatchString(value)
 	case commonv1.PeriodType_PERIOD_TYPE_QUARTER:
-		return len(key) == 7 && key[5] == 'Q'
+		return analyticsQuarterKey.MatchString(value)
 	case commonv1.PeriodType_PERIOD_TYPE_YEAR:
-		return len(key) == 4
+		return analyticsYearKey.MatchString(value)
+	case commonv1.PeriodType_PERIOD_TYPE_ALL_TIME:
+		return value == "all_time"
+	case commonv1.PeriodType_PERIOD_TYPE_ROLLING_YEAR:
+		return value == "rolling_year"
+	case commonv1.PeriodType_PERIOD_TYPE_ROLLING_QUARTER:
+		return value == "rolling_quarter"
 	default:
 		return false
 	}
 }
 
-func (c converter) analyticsPeriodKey(value, field string) bool {
+func (c converter) analyticsPeriodKey(period commonv1.PeriodType, value, field string) bool {
 	if value == "" {
 		c.metrics.Untranslated(field, "absent")
 		return false
 	}
-	if !analyticsKeyShape.MatchString(value) {
+	if !analyticsKeyMatches(period, value) {
 		c.metrics.Untranslated(field, "invalid")
 		return false
 	}
@@ -343,4 +329,12 @@ func (c converter) analyticsOptionals(resp *analyticsv1.GetAnalyticsResponse) bo
 		}
 	}
 	return true
+}
+
+func rollingPeriod(period commonv1.PeriodType) bool {
+	return period == commonv1.PeriodType_PERIOD_TYPE_ROLLING_YEAR || period == commonv1.PeriodType_PERIOD_TYPE_ROLLING_QUARTER
+}
+
+func calendarAnalyticsKey(period commonv1.PeriodType, key string) bool {
+	return (period == commonv1.PeriodType_PERIOD_TYPE_MONTH || period == commonv1.PeriodType_PERIOD_TYPE_QUARTER || period == commonv1.PeriodType_PERIOD_TYPE_YEAR) && analyticsKeyMatches(period, key)
 }
