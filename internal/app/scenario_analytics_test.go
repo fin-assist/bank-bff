@@ -163,13 +163,14 @@ func scenarioAnalyticsPeriods(t *testing.T, start starter) {
 	auth := base(map[string]string{"Authorization": "Bearer " + access, "X-Read-Primary": "1"})
 	fixture := analyticsMessage(t)
 	for _, period := range []string{"month", "quarter", "year"} {
+		keys := map[string][]string{"month": {"2026-09", "2026-08"}, "quarter": {"2026-Q3", "2026-Q2"}, "year": {"2026", "2025"}}[period]
 		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
 			a.ListFunc = func(ctx context.Context, in *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
 				profileDeadline(t, ctx)
 				if in.GetUserId() != "" || strings.ToLower(strings.TrimPrefix(in.GetPeriod().String(), "PERIOD_TYPE_")) != period {
 					t.Error(in)
 				}
-				return &analyticsv1.ListPeriodsResponse{TimeZone: "Asia/Vladivostok", Periods: []*analyticsv1.PeriodItem{{Key: "2026-09", Range: fixture.Period.Range, Coverage: commonv1.Coverage_COVERAGE_COMPLETE}, {Key: "2026-08", Range: fixture.Period.Range, Coverage: commonv1.Coverage(99)}}}, nil
+				return &analyticsv1.ListPeriodsResponse{TimeZone: "Asia/Vladivostok", Periods: []*analyticsv1.PeriodItem{{Key: keys[0], Range: fixture.Period.Range, Coverage: commonv1.Coverage_COVERAGE_COMPLETE}, {Key: keys[1], Range: fixture.Period.Range, Coverage: commonv1.Coverage(99)}}}, nil
 			}
 		})
 		r := b.do(t, request{method: "GET", path: "/v1/analytics/periods?period=" + period, route: "/v1/analytics/periods", header: auth})
@@ -361,7 +362,7 @@ func scenarioAnalyticsMalformed(t *testing.T, start starter) {
 		}
 	}
 	for _, tc := range malformedPeriodItems() {
-		in := &analyticsv1.PeriodItem{Key: "2026", Range: analyticsMessage(t).Period.Range}
+		in := &analyticsv1.PeriodItem{Key: "2026-09", Range: analyticsMessage(t).Period.Range}
 		tc.mutate(in)
 		before := b.analyticsCounter(t, "finassist_untranslated_code_total", tc.field, tc.code)
 		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
@@ -404,7 +405,7 @@ func scenarioAnalyticsMalformed(t *testing.T, start starter) {
 			return in, nil
 		}
 		a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
-			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "2026", Range: in.Period.Range, Coverage: commonv1.Coverage(99)}}}, nil
+			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "2026-09", Range: in.Period.Range, Coverage: commonv1.Coverage(99)}}}, nil
 		}
 	})
 	for _, p := range []struct{ path, field string }{{"/v1/analytics", "GetAnalyticsResponse.period.bounds.coverage"}, {"/v1/analytics/periods", "ListPeriodsResponse.periods.coverage"}} {
@@ -438,7 +439,7 @@ func malformedPeriodItems() []malformedPeriodItem {
 func scenarioAnalyticsEnvelope(t *testing.T, start starter) {
 	b := start(t, nil)
 	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
-	for _, key := range []string{"", "2026-00", "2026-13", "2026-Q0", "2026-Q5", "2026-1", "26", "2026-09-extra", "2026-W01"} {
+	for _, key := range []string{"", "2026-00", "2026-13", "2026-Q0", "2026-Q5", "2026-1", "26", "2026-09-extra", "2026-W01", "all_time"} {
 		for _, target := range []string{"params", "previous", "next", "periods"} {
 			in := analyticsMessage(t)
 			field := "GetAnalyticsResponse.params.period_key"

@@ -497,6 +497,8 @@ paths:
       tags:
       - auth
       operationId: logout
+      x-idempotency: not-required
+      x-idempotency-reason: Повторный выход завершает ту же сессию и возвращает 204 без нового эффекта.
       x-min-request-body-bytes: 65536
       summary: Выход
       description: Завершает сессию. Повтор возвращает `204`.
@@ -1402,21 +1404,24 @@ paths:
       - name: period
         in: query
         description: |
-          `month` (по умолчанию), `quarter`, `year`. Набор расширяемый (например, `week`) — новое значение
+          `month` (по умолчанию), `quarter`, `year`, `all_time`. Набор расширяемый (например, `week`) — новое значение
           появляется вместе с новым форматом `PeriodKey`; клиент запрашивает только известные ему значения.
         schema:
           type: string
-          description: 'Тип периода: `month`, `quarter`, `year`. Открытый набор: клиент запрашивает только известные значения.'
+          description: 'Тип периода: `month`, `quarter`, `year`, `all_time` (вся загруженная история). Открытый набор: клиент запрашивает только известные значения.'
           x-extensible-enum:
           - month
           - quarter
           - year
+          - all_time
           default: month
       - name: date
         in: query
         description: |
           Период в поясе профиля. Может быть точнее `period`: `period=quarter&date=2026-09` — квартал, в который
           входит сентябрь; ответ содержит точный ключ (`2026-Q3`). Без параметра — последний период с данными.
+          Для all_time допустимы только отсутствие date или date=all_time; смешение с календарным типом/ключом —
+          400 VALIDATION_ERROR (date, INVALID_FORMAT).
         schema:
           $ref: '#/components/schemas/PeriodKey'
       - name: transfer_mode
@@ -1438,7 +1443,9 @@ paths:
         description: |
           Примитивы, которые умеет рисовать клиент: `type@v` через запятую (`tile_group@1,chart@1`). Сервер отдаёт
           только совместимые блоки (при возможности — в поддерживаемой версии или более простым примитивом). Без
-          параметра — версия 1 всех типов каталога.
+          параметра или пустая строка — версия 1 всех типов каталога. type непустой, без запятой/@;
+          v — ASCII-десятичное целое 1..2147483647 с необязательным одним ведущим +, без пробелов. Повторы типа — максимальная версия, неизвестные типы допустимы и не порождают
+          неизвестных серверу блоков. Нарушение — 400 VALIDATION_ERROR (field=supports, code=INVALID_FORMAT).
         schema:
           type: string
           example: heading@1,text@1,rows@1,chart@1,tile_group@1,ranked_list@1,insight_card@1
@@ -1487,7 +1494,7 @@ paths:
                       "id": "tiles",
                       "type": "tile_group",
                       "v": 1,
-                      "alt_text": "Доходы минус расходы 72 580 ₽, прогноз расходов около 101 200 ₽, расходы в день 3 372,80 ₽, доходы 156 900 ₽",
+                      "alt_text": "Доходы минус расходы 72 580 ₽, расходы 84 320 ₽, расходы в день 3 372,80 ₽, доходы 156 900 ₽, прогноз расходов около 101 200 ₽",
                       "data": {
                         "tiles": [
                           {
@@ -1498,12 +1505,20 @@ paths:
                             "caption": "46% дохода · по выписке"
                           },
                           {
-                            "id": "forecast",
-                            "title": "Прогноз расходов на сентябрь",
-                            "value": 10120000,
+                            "id": "expense",
+                            "title": "Расходы",
+                            "value": 8432000,
                             "value_kind": "amount",
-                            "approx": true,
-                            "caption": "к 30 сентября"
+                            "caption": "по выписке за 1–25 сентября",
+                            "action": {
+                              "type": "open_operations",
+                              "filter": {
+                                "from": "2026-09-01T00:00:00+03:00",
+                                "to": "2026-10-01T00:00:00+03:00",
+                                "kind": "expense",
+                                "transfer_mode": "with"
+                              }
+                            }
                           },
                           {
                             "id": "daily_expense",
@@ -1527,6 +1542,14 @@ paths:
                                 "transfer_mode": "with"
                               }
                             }
+                          },
+                          {
+                            "id": "forecast",
+                            "title": "Прогноз расходов на сентябрь",
+                            "value": 10120000,
+                            "value_kind": "amount",
+                            "approx": true,
+                            "caption": "к 30 сентября"
                           }
                         ]
                       }
@@ -1644,11 +1667,12 @@ paths:
         description: Тип периода, как в `getAnalytics`.
         schema:
           type: string
-          description: 'Тип периода: `month`, `quarter`, `year`. Открытый набор: клиент запрашивает только известные значения.'
+          description: 'Тип периода: `month`, `quarter`, `year`, `all_time`. Открытый набор: клиент запрашивает только известные значения.'
           x-extensible-enum:
           - month
           - quarter
           - year
+          - all_time
           default: month
       - $ref: '#/components/parameters/XRequestId'
       - $ref: '#/components/parameters/XClientVersion'
@@ -2233,10 +2257,19 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          example:
-            error:
-              code: REQUEST_IN_PROGRESS
-              message: Request with this Idempotency-Key is in progress
+          examples:
+            idempotencyConflict:
+              summary: Ключ уже использован с другим телом
+              value:
+                error:
+                  code: IDEMPOTENCY_CONFLICT
+                  message: Idempotency-Key was already used with a different request body
+            requestInProgress:
+              summary: Запрос с этим ключом ещё выполняется; ждать Retry-After
+              value:
+                error:
+                  code: REQUEST_IN_PROGRESS
+                  message: Request with this Idempotency-Key is in progress
     RequestTooLarge:
       description: |
         `REQUEST_TOO_LARGE` — JSON-тело больше фактического транспортного предела BFF у шести операций
@@ -2354,17 +2387,18 @@ components:
     PeriodKey:
       type: string
       description: |
-        Ключ календарного периода: `YYYY-MM` (месяц), `YYYY-Qn` (квартал), `YYYY` (год). Формат расширяется вместе
+        Ключ периода: `YYYY-MM` (месяц), `YYYY-Qn` (квартал), `YYYY` (год), `all_time` (вся история). Формат расширяется вместе
         с `PeriodType` (неделя — `YYYY-Www`); сервер возвращает ключи только в формате запрошенного `period`.
-      pattern: ^\d{4}(-(0[1-9]|1[0-2])|-Q[1-4])?$
+      pattern: ^(\d{4}(-(0[1-9]|1[0-2])|-Q[1-4])?|all_time)$
       example: '2026-Q3'
     PeriodType:
       type: string
-      description: 'Тип периода: `month`, `quarter`, `year`. Открытый набор: клиент запрашивает только известные значения.'
+      description: 'Тип периода: `month`, `quarter`, `year`, `all_time`. Открытый набор: клиент запрашивает только известные значения.'
       x-extensible-enum:
       - month
       - quarter
       - year
+      - all_time
     TransferMode:
       type: string
       description: |
@@ -3764,6 +3798,9 @@ components:
           $ref: '#/components/schemas/AnalyticsState'
     AnalyticsPeriodInfo:
       type: object
+      description: >-
+        Для all_time range — оболочка всех покрытых дней, как state.data_from/data_to;
+        coverage=complete без внутренних пропусков независимо от today. Месячные точки сохраняют календарную полноту.
       required:
       - range
       - is_current
@@ -3774,7 +3811,7 @@ components:
           $ref: '#/components/schemas/Range'
         is_current:
           type: boolean
-          description: Период ещё идёт.
+          description: Период ещё идёт; для all_time всегда false.
         coverage:
           $ref: '#/components/schemas/Coverage'
         data_from:
@@ -4042,7 +4079,7 @@ components:
       description: |
         Блок общего каталога (api.md «Блоки», FIN-4): экран «Аналитика» (6.1) и ответ помощника (7.2). Оболочка общая,
         содержимое — в `data` по схеме примитива `type` версии `v`: `heading` — `HeadingData`, `text` — `TextData`,
-        `rows` — `RowsData`, `chart` — `ChartData`, `tile_group` — `TileGroupData`, `ranked_list` — `RankedListData`,
+        `rows` — `RowsData`, `chart` — `ChartData`, `tile_group@1` — `TileGroupData`, `tile_group@2` — `TileGroupDataV2`, `ranked_list` — `RankedListData`,
         `insight_card` — `InsightCardData`. Неизвестный `type` или `v` клиент не рисует: показывает `alt_text`, если он
         есть, иначе пропускает блок. Блок, который не удалось разобрать, пропускается, остальной экран показывается.
       required:
@@ -4109,7 +4146,9 @@ components:
       description: |
         Блокировка плитки внутри `data` блока `tile_group` — те же поля, что у `BlockLock`, но `text` может быть пустым
         или отсутствовать: `bank-bff` не заглядывает в `data` и текст не подставляет, «Пока недоступно» показывает
-        клиент (grpc-api.md 5.3).
+        клиент (grpc-api.md 5.3). Для need_full_months у прогноза text объясняет базу всей истории:
+        точные полные и неполные календарные месяцы независимо от выбранного года; без согласованных
+        метаданных — правило без предполагаемых дат (FIN-408, docs/api.md 6.1).
       required:
       - reason
       properties:
@@ -4170,9 +4209,11 @@ components:
       type: object
       nullable: true
       description: |
-        Действие из фиксированного словаря: `open_operations` — Поиск с `filter`; `open_assistant` — чат помощника;
+        Действие из фиксированного словаря: `select_analytics_period` — смена периода аналитики по period/date с сохранением режима переводов;
+        Действие выбора периода поддерживается только у точки monthly_chart экрана «Аналитика»; в assistant/balance и других контекстах игнорируется.
+        `open_operations` — Поиск с `filter`; `open_assistant` — чат помощника;
         `dismiss_regular_payment` — кнопка `label` у строки платежа (6.3 с `payment_id`). Неизвестное — элемент не
-        нажимается. Поля своего `type` обязательны (`filter`; `payment_id` и `label`): без них действие — как
+        нажимается. Поля своего `type` обязательны (`filter`; `payment_id` и `label`; `period` и `date`): без них действие — как
         неизвестное, кнопка не показывается. Пустая строка и `filter` без условий — как отсутствие. Условие — хотя бы одно из
         `from`/`to`, `q`, `category_id`, `kind`, `amount_from`/`amount_to`, `selection`; `transfer_mode` и `selection_name`
         не в счёт. Значения «все» у `kind` нет: без направления поля нет.
@@ -4185,6 +4226,7 @@ components:
           - open_operations
           - open_assistant
           - dismiss_regular_payment
+          - select_analytics_period
         filter:
           nullable: true
           allOf:
@@ -4198,6 +4240,20 @@ components:
         label:
           type: string
           nullable: true
+        period:
+          type: string
+          nullable: true
+          x-extensible-enum:
+          - month
+          - quarter
+          - year
+          - all_time
+          description: Только select_analytics_period; вместе с date обязателен для этого действия. Неизвестное значение — действие не нажимается.
+        date:
+          type: string
+          nullable: true
+          pattern: ^(\d{4}(-(0[1-9]|1[0-2])|-Q[1-4])?|all_time)$
+          description: Точный ключ целевого period для select_analytics_period. Несовпадение типа и ключа — действие не нажимается.
     ValueKind:
       type: string
       description: |
@@ -4331,6 +4387,8 @@ components:
           type: string
           nullable: true
           description: Подпись неполного столбца («по 25-е»).
+        action:
+          $ref: '#/components/schemas/BlockAction'
     BlockValue:
       type: object
       nullable: true
@@ -4349,11 +4407,41 @@ components:
         action:
           $ref: '#/components/schemas/BlockAction'
     TileGroupData:
+      description: >-
+        `tile_group` v1 — плитки по две в ряд, по порядку. Открытый серверный список плиток.
+        Текущая композиция аналитики — balance, expense (факт),
+        daily_expense, income и дополнительная forecast для свежего текущего периода.
+        Блокировка прогноза не скрывает фактические расходы (FIN-408).
       type: object
-      description: '`tile_group` v1 — плитки по две в ряд, по порядку.'
       required:
       - tiles
       properties:
+        tiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tile'
+    TileGroupDataV2:
+      description: >-
+        tile_group@2 — упорядоченные группы плиток. Каждая группа визуально отделена; внутри плитки по две в ряд,
+        последняя одиночная занимает всю ширину. Плитки используют прежнюю схему Tile. Только по supports=tile_group@2
+        или выше; без supports и для max_version=1 сервер возвращает прежний tile_group@1.
+      type: object
+      required:
+      - groups
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/TileGroupSection'
+    TileGroupSection:
+      type: object
+      required:
+      - tiles
+      properties:
+        title:
+          type: string
+          nullable: true
+          description: Необязательный заголовок группы, готовый текст сервера.
         tiles:
           type: array
           items:
@@ -4514,7 +4602,10 @@ components:
           $ref: '#/components/schemas/BlockAction'
     Chip:
       type: object
-      description: Чип-переход под ответом (и событие `chip`). Неизвестный `screen` — чип не показывать.
+      description: >-
+        Чип-переход под ответом (и событие chip). Неизвестный screen, period или некорректный ключ — пропустить
+        этот чип, продолжить показ ответа. До отдельного согласования возможностей assistant не генерирует,
+        не сохраняет и не отдаёт all_time-чипы в потоке/snapshot/истории.
       required:
       - label
       - screen
@@ -4537,7 +4628,7 @@ components:
           nullable: true
           allOf:
           - $ref: '#/components/schemas/AnalyticsParams'
-          description: Для `analytics`.
+          description: Для analytics — только month/quarter/year; all_time запрещён до отдельного согласования возможностей.
           type: object
     AnswerSource:
       type: object
