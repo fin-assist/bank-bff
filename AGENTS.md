@@ -39,7 +39,7 @@ ENV=dev builds no public API (NewAssembly refuses dev): no auth bypass. Pre-stre
 JSON; streams extend their own connection deadlines and have their own deadline and caps.
 Add an infrastructure dependency only for a real endpoint/usecase; no dummy code for coverage.
 
-Current tagged contracts/gen/go is v0.7.0 (FIN-363, merged 928bac0). FIN-342 REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
+Current tagged contracts/gen/go is v0.8.0 (FIN-409, merged 22c5213). FIN-400 supports the all_time singleton in analytics reads; nested tile groups and chart actions remain opaque Struct data. Typed BlockAction period/period_key are projected as optional period/date. Assistant analytics chips remain calendar-only until capability negotiation; unsupported parameters skip only the chip in history, snapshots and events. FIN-342 REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
 the declared safety of the entire REST operation; an unknown keyed POST replay window stays false.
 Do not infer permission from an error code, HTTP status, RetryInfo, text or UUID. Nested result Status
 is decoded only by finerr.DecodeResultStatus: valid canonical reason wins, present-invalid never reads
