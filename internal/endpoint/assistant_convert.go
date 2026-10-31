@@ -157,7 +157,8 @@ func (c converter) chip(ch *assistantv1.Chip) (Chip, bool) {
 	case assistantv1.ChipScreen_CHIP_SCREEN_ANALYTICS:
 		params, ok := analyticsParams(ch.Params)
 		if !ok || ch.Params.GetPeriod() == commonv1.PeriodType_PERIOD_TYPE_ALL_TIME || !analyticsKeyMatches(ch.Params.GetPeriod(), ch.Params.GetPeriodKey()) {
-			break
+			c.metrics.Untranslated("Chip.params", "unsupported")
+			return Chip{}, false
 		}
 		out.Screen, out.Params = "analytics", params
 		return out, true

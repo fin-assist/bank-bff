@@ -46,7 +46,7 @@ func TestIntegrationAllTimeTransportAndComposition(t *testing.T) {
 				if in.GetPeriod() != commonv1.PeriodType_PERIOD_TYPE_ALL_TIME {
 					t.Error(in)
 				}
-				return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "all_time", Range: fixture.Period.Range, Coverage: commonv1.Coverage_COVERAGE_PARTIAL}}}, nil
+				return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "all_time", Range: fixture.Period.Range, Coverage: commonv1.Coverage_COVERAGE_COMPLETE}}}, nil
 			}
 		})
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -69,6 +69,44 @@ func TestIntegrationAllTimeTransportAndComposition(t *testing.T) {
 		cancel()
 		if err != nil || len(page.Periods) != 1 || !c.analyticsPeriodKey(commonv1.PeriodType_PERIOD_TYPE_ALL_TIME, page.Periods[0].Key, "ListPeriodsResponse.periods.key") {
 			t.Fatal(page, err)
+		}
+	}
+	for _, key := range []string{"", "2026-13"} {
+		fixture := allTimeMessage()
+		fixture.Blocks[0].Action = &commonv1.BlockAction{Type: "select_analytics_period", PeriodKey: &key}
+		peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+				return fixture, nil
+			}
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		wire, err := client.GetAnalytics(ctx, &analyticsv1.GetAnalyticsRequest{Period: commonv1.PeriodType_PERIOD_TYPE_ALL_TIME})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, ok := c.analytics(wire)
+		if !ok || (*out.Blocks)[0].Action.Date != nil {
+			t.Fatal(out, ok)
+		}
+	}
+	for _, period := range []commonv1.PeriodType{1, 2, 3} {
+		fixture := allTimeMessage()
+		fixture.Params.Period = period
+		fixture.Params.PeriodKey = map[commonv1.PeriodType]string{1: "2026", 2: "2026-10", 3: "2026-Q4"}[period]
+		peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
+				return fixture, nil
+			}
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		wire, err := client.GetAnalytics(ctx, &analyticsv1.GetAnalyticsRequest{Period: period})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := c.analytics(wire); ok {
+			t.Fatal("crossed calendar response accepted", wire)
 		}
 	}
 	peers.Assistant.Set(func(a *testpeer.Assistant) {

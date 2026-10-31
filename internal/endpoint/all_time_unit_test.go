@@ -25,7 +25,7 @@ func allTimeMessage() *analyticsv1.GetAnalyticsResponse {
 	out.Params.Period, out.Params.PeriodKey = commonv1.PeriodType_PERIOD_TYPE_ALL_TIME, "all_time"
 	out.Period.Range = &commonv1.TimeRange{Start: from, End: to}
 	out.Period.IsCurrent = false
-	out.Period.Bounds = &commonv1.DataBounds{Coverage: commonv1.Coverage_COVERAGE_PARTIAL, DataFrom: from, DataTo: to}
+	out.Period.Bounds = &commonv1.DataBounds{Coverage: commonv1.Coverage_COVERAGE_COMPLETE, DataFrom: from, DataTo: to}
 	out.Navigation = &analyticsv1.Navigation{}
 	out.State.DataFrom, out.State.DataTo = from, to
 	data, _ := structpb.NewStruct(map[string]any{"groups": []any{map[string]any{"tiles": []any{
@@ -71,7 +71,7 @@ func TestUnitAllTimeInputsAndProjection(t *testing.T) {
 		if in.GetPeriod() != commonv1.PeriodType_PERIOD_TYPE_ALL_TIME || in.UserId != nil {
 			t.Fatal(in)
 		}
-		return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "all_time", Range: allTimeMessage().Period.Range, Coverage: commonv1.Coverage_COVERAGE_PARTIAL}}}, nil
+		return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "all_time", Range: allTimeMessage().Period.Range, Coverage: commonv1.Coverage_COVERAGE_COMPLETE}}}, nil
 	}
 	if r := u.serve(t, "GET", "/v1/analytics/periods?period=all_time", "", nil); r.Code != 200 || r.json["periods"].([]any)[0].(map[string]any)["key"] != "all_time" {
 		t.Fatal(r.Code, r.Body.String())
@@ -149,6 +149,35 @@ func TestUnitAssistantSkipsUnsupportedAnalyticsChips(t *testing.T) {
 		}
 		if len(out) != want || out[len(out)-1].Screen != "operations" {
 			t.Fatalf("period=%v key=%q output=%v", tc.period, tc.key, out)
+		}
+	}
+}
+
+func TestUnitOptionalActionDropsInvalidKeysAndResponseKeysMatchTheirType(t *testing.T) {
+	u := newUnitAPI(t, rest.StreamLimits{})
+	for _, key := range []string{"", "2026-13", "garbage"} {
+		fixture := allTimeMessage()
+		fixture.Blocks[0].Action = &commonv1.BlockAction{Type: "select_analytics_period", Period: commonv1.PeriodType_PERIOD_TYPE_MONTH.Enum(), PeriodKey: &key}
+		u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return fixture, nil }
+		r := u.serve(t, "GET", "/v1/analytics?period=all_time", "", nil)
+		if r.Code != 200 {
+			t.Fatal(r.Code, r.Body.String())
+		}
+		action := r.json["blocks"].([]any)[0].(map[string]any)["action"].(map[string]any)
+		if _, exists := action["date"]; exists || action["period"] != "month" {
+			t.Fatal(action)
+		}
+	}
+	if !gathered(t, u, "finassist_untranslated_code_total", "Block.action.period_key", 3) {
+		t.Fatal("invalid optional targets were not counted")
+	}
+	for _, period := range []commonv1.PeriodType{commonv1.PeriodType_PERIOD_TYPE_MONTH, commonv1.PeriodType_PERIOD_TYPE_QUARTER, commonv1.PeriodType_PERIOD_TYPE_YEAR} {
+		fixture := allTimeMessage()
+		fixture.Params.Period = period
+		fixture.Params.PeriodKey = map[commonv1.PeriodType]string{1: "2026", 2: "2026-10", 3: "2026-Q4"}[period]
+		u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return fixture, nil }
+		if r := u.serve(t, "GET", "/v1/analytics", "", nil); r.Code != 500 {
+			t.Fatal(period, r.Code, r.Body.String())
 		}
 	}
 }

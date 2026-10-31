@@ -106,7 +106,14 @@ func (c converter) analyticsBlock(b *commonv1.Block) analyticsBlock {
 		out.Lock = &analyticsLock{Reason: l.GetReason(), Text: text, Required: l.Required, Available: l.Available, AvailableFrom: optionalMoment(l.AvailableFrom, c.loc)}
 	}
 	if a := b.GetAction(); a != nil {
-		out.Action = &analyticsAction{Type: a.GetType(), Filter: operationsFilter(a.Filter, c.loc), PaymentID: a.PaymentId, Label: a.Label, Date: a.PeriodKey}
+		out.Action = &analyticsAction{Type: a.GetType(), Filter: operationsFilter(a.Filter, c.loc), PaymentID: a.PaymentId, Label: a.Label}
+		if key := a.PeriodKey; key != nil {
+			if *key == "all_time" || analyticsKeyShape.MatchString(*key) {
+				out.Action.Date = key
+			} else {
+				c.metrics.Untranslated("Block.action.period_key", "invalid")
+			}
+		}
 		if a.Period != nil {
 			if period, ok := enumCode(a.GetPeriod()); ok {
 				out.Action.Period = &period
@@ -259,11 +266,7 @@ func (c converter) analyticsPeriodKey(period commonv1.PeriodType, value, field s
 		c.metrics.Untranslated(field, "absent")
 		return false
 	}
-	valid := analyticsKeyShape.MatchString(value)
-	if period == commonv1.PeriodType_PERIOD_TYPE_ALL_TIME {
-		valid = value == "all_time"
-	}
-	if !valid {
+	if !analyticsKeyMatches(period, value) {
 		c.metrics.Untranslated(field, "invalid")
 		return false
 	}
