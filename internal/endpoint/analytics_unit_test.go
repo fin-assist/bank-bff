@@ -312,7 +312,7 @@ func TestUnitAnalyticsCalendarKeys(t *testing.T) {
 			}
 		}
 	}
-	for _, key := range []string{"", "2026-00", "2026-13", "2026-Q0", "2026-Q5", "2026-1", "26", "2026-09-extra", "2026-W01"} {
+	for _, key := range []string{"", "2026-00", "2026-13", "2026-Q0", "2026-Q5", "2026-1", "26", "2026-09-extra", "2026-W01", "all_time"} {
 		for _, target := range []string{"params", "previous", "next", "periods"} {
 			u := newUnitAPI(t, rest.StreamLimits{})
 			in := analyticsFixture()
