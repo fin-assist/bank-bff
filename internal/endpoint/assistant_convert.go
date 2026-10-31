@@ -5,7 +5,6 @@ import (
 	"time"
 
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
-	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
 	"github.com/fin-assist/contracts/gen/go/finerr"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 
@@ -156,7 +155,7 @@ func (c converter) chip(ch *assistantv1.Chip) (Chip, bool) {
 		return out, true
 	case assistantv1.ChipScreen_CHIP_SCREEN_ANALYTICS:
 		params, ok := analyticsParams(ch.Params)
-		if !ok || ch.Params.GetPeriod() == commonv1.PeriodType_PERIOD_TYPE_ALL_TIME || !analyticsKeyMatches(ch.Params.GetPeriod(), ch.Params.GetPeriodKey()) {
+		if !ok || !calendarAnalyticsKey(ch.Params.GetPeriod(), ch.Params.GetPeriodKey()) {
 			c.metrics.Untranslated("Chip.params", "unsupported")
 			return Chip{}, false
 		}

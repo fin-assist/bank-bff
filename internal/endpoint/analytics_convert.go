@@ -108,7 +108,7 @@ func (c converter) analyticsBlock(b *commonv1.Block) analyticsBlock {
 	if a := b.GetAction(); a != nil {
 		out.Action = &analyticsAction{Type: a.GetType(), Filter: operationsFilter(a.Filter, c.loc), PaymentID: a.PaymentId, Label: a.Label}
 		if key := a.PeriodKey; key != nil {
-			if *key == "all_time" || analyticsKeyShape.MatchString(*key) {
+			if *key == "all_time" || *key == "rolling_year" || *key == "rolling_quarter" || analyticsKeyShape.MatchString(*key) {
 				out.Action.Date = key
 			} else {
 				c.metrics.Untranslated("Block.action.period_key", "invalid")
@@ -125,7 +125,7 @@ func (c converter) analyticsBlock(b *commonv1.Block) analyticsBlock {
 	return out
 }
 
-func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsResponse, bool) {
+func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse, requestedPeriod commonv1.PeriodType) (analyticsResponse, bool) {
 	out := analyticsResponse{HasData: resp.GetHasData()}
 	if !out.HasData {
 		return out, true
@@ -144,6 +144,9 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 	}
 	if _, ok := enumCode(pms.GetPeriod()); !ok {
 		return c.analyticsInvalid("GetAnalyticsResponse.params.period", "unknown")
+	}
+	if (rollingPeriod(requestedPeriod) || rollingPeriod(pms.GetPeriod())) && pms.GetPeriod() != requestedPeriod {
+		return c.analyticsInvalid("GetAnalyticsResponse.params.period", "invalid")
 	}
 	if !c.analyticsPeriodKey(pms.GetPeriod(), pms.GetPeriodKey(), "GetAnalyticsResponse.params.period_key") {
 		return analyticsResponse{}, false
@@ -193,6 +196,9 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 			value *string
 			field string
 		}{{n.Previous, "GetAnalyticsResponse.navigation.previous"}, {n.Next, "GetAnalyticsResponse.navigation.next"}} {
+			if rollingPeriod(pms.GetPeriod()) && key.value != nil {
+				return c.analyticsInvalid(key.field, "invalid")
+			}
 			if !c.analyticsNavigationKey(key.value, key.field) {
 				return analyticsResponse{}, false
 			}
@@ -258,6 +264,10 @@ func analyticsKeyMatches(period commonv1.PeriodType, value string) bool {
 		return analyticsYearKey.MatchString(value)
 	case commonv1.PeriodType_PERIOD_TYPE_ALL_TIME:
 		return value == "all_time"
+	case commonv1.PeriodType_PERIOD_TYPE_ROLLING_YEAR:
+		return value == "rolling_year"
+	case commonv1.PeriodType_PERIOD_TYPE_ROLLING_QUARTER:
+		return value == "rolling_quarter"
 	default:
 		return false
 	}
@@ -322,4 +332,12 @@ func (c converter) analyticsOptionals(resp *analyticsv1.GetAnalyticsResponse) bo
 		}
 	}
 	return true
+}
+
+func rollingPeriod(period commonv1.PeriodType) bool {
+	return period == commonv1.PeriodType_PERIOD_TYPE_ROLLING_YEAR || period == commonv1.PeriodType_PERIOD_TYPE_ROLLING_QUARTER
+}
+
+func calendarAnalyticsKey(period commonv1.PeriodType, key string) bool {
+	return (period == commonv1.PeriodType_PERIOD_TYPE_MONTH || period == commonv1.PeriodType_PERIOD_TYPE_QUARTER || period == commonv1.PeriodType_PERIOD_TYPE_YEAR) && analyticsKeyMatches(period, key)
 }

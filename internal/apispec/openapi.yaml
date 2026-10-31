@@ -1404,23 +1404,25 @@ paths:
       - name: period
         in: query
         description: |
-          `month` (по умолчанию), `quarter`, `year`, `all_time`. Набор расширяемый (например, `week`) — новое значение
+          `month` (по умолчанию), `quarter`, `year`, `all_time`, `rolling_year`, `rolling_quarter`. Набор расширяемый (например, `week`) — новое значение
           появляется вместе с новым форматом `PeriodKey`; клиент запрашивает только известные ему значения.
         schema:
           type: string
-          description: 'Тип периода: `month`, `quarter`, `year`, `all_time` (вся загруженная история). Открытый набор: клиент запрашивает только известные значения.'
+          description: 'Тип периода: `month`, `quarter`, `year`, `all_time`, `rolling_year`, `rolling_quarter` (последние 3 месяца). Открытый набор: клиент запрашивает только известные значения.'
           x-extensible-enum:
           - month
           - quarter
           - year
           - all_time
+          - rolling_year
+          - rolling_quarter
           default: month
       - name: date
         in: query
         description: |
           Период в поясе профиля. Может быть точнее `period`: `period=quarter&date=2026-09` — квартал, в который
           входит сентябрь; ответ содержит точный ключ (`2026-Q3`). Без параметра — последний период с данными.
-          Для all_time допустимы только отсутствие date или date=all_time; смешение с календарным типом/ключом —
+          Для all_time/rolling_year/rolling_quarter допустимы только отсутствие date или date, равный period; смешение типов/ключей —
           400 VALIDATION_ERROR (date, INVALID_FORMAT).
         schema:
           $ref: '#/components/schemas/PeriodKey'
@@ -1667,12 +1669,14 @@ paths:
         description: Тип периода, как в `getAnalytics`.
         schema:
           type: string
-          description: 'Тип периода: `month`, `quarter`, `year`, `all_time`. Открытый набор: клиент запрашивает только известные значения.'
+          description: 'Тип периода: `month`, `quarter`, `year`, `all_time`, `rolling_year`, `rolling_quarter`. Открытый набор: клиент запрашивает только известные значения.'
           x-extensible-enum:
           - month
           - quarter
           - year
           - all_time
+          - rolling_year
+          - rolling_quarter
           default: month
       - $ref: '#/components/parameters/XRequestId'
       - $ref: '#/components/parameters/XClientVersion'
@@ -2387,18 +2391,20 @@ components:
     PeriodKey:
       type: string
       description: |
-        Ключ периода: `YYYY-MM` (месяц), `YYYY-Qn` (квартал), `YYYY` (год), `all_time` (вся история). Формат расширяется вместе
+        Ключ периода: `YYYY-MM` (месяц), `YYYY-Qn` (квартал), `YYYY` (год), `all_time` (вся история), `rolling_year`/`rolling_quarter` (последние 12/3 месяца). Формат расширяется вместе
         с `PeriodType` (неделя — `YYYY-Www`); сервер возвращает ключи только в формате запрошенного `period`.
-      pattern: ^(\d{4}(-(0[1-9]|1[0-2])|-Q[1-4])?|all_time)$
+      pattern: ^(\d{4}(-(0[1-9]|1[0-2])|-Q[1-4])?|all_time|rolling_year|rolling_quarter)$
       example: '2026-Q3'
     PeriodType:
       type: string
-      description: 'Тип периода: `month`, `quarter`, `year`, `all_time`. Открытый набор: клиент запрашивает только известные значения.'
+      description: 'Тип периода: `month`, `quarter`, `year`, `all_time`, `rolling_year`, `rolling_quarter`. Открытый набор: клиент запрашивает только известные значения.'
       x-extensible-enum:
       - month
       - quarter
       - year
       - all_time
+      - rolling_year
+      - rolling_quarter
     TransferMode:
       type: string
       description: |
@@ -3800,7 +3806,11 @@ components:
       type: object
       description: >-
         Для all_time range — оболочка всех покрытых дней, как state.data_from/data_to;
-        coverage=complete без внутренних пропусков независимо от today. Месячные точки сохраняют календарную полноту.
+        coverage=complete без внутренних пропусков независимо от today. Для rolling_year/rolling_quarter:
+        конец — начало дня после последнего покрытого дня; начало — сдвиг конца на 12/3 календарных месяца
+        с ограничением дня концом целевого месяца в поясе профиля. Range не сокращается при короткой истории;
+        complete только при покрытии каждого его дня, иначе partial. Месячные точки сохраняют календарную полноту;
+        у скользящих режимов край обрезан интервалом и всегда partial либо no_data.
       required:
       - range
       - is_current
@@ -3811,7 +3821,7 @@ components:
           $ref: '#/components/schemas/Range'
         is_current:
           type: boolean
-          description: Период ещё идёт; для all_time всегда false.
+          description: Период ещё идёт; для all_time/rolling_year/rolling_quarter всегда false.
         coverage:
           $ref: '#/components/schemas/Coverage'
         data_from:
@@ -4248,11 +4258,13 @@ components:
           - quarter
           - year
           - all_time
+          - rolling_year
+          - rolling_quarter
           description: Только select_analytics_period; вместе с date обязателен для этого действия. Неизвестное значение — действие не нажимается.
         date:
           type: string
           nullable: true
-          pattern: ^(\d{4}(-(0[1-9]|1[0-2])|-Q[1-4])?|all_time)$
+          pattern: ^(\d{4}(-(0[1-9]|1[0-2])|-Q[1-4])?|all_time|rolling_year|rolling_quarter)$
           description: Точный ключ целевого period для select_analytics_period. Несовпадение типа и ключа — действие не нажимается.
     ValueKind:
       type: string
@@ -4367,7 +4379,7 @@ components:
         range:
           allOf:
           - $ref: '#/components/schemas/Range'
-          description: Период точки; подпись оси клиент формирует из него.
+          description: Период точки; подпись оси клиент формирует из него с годом. В rolling_year/rolling_quarter — пересечение месяца с выбранным интервалом; действие открывает полный месяц.
         value:
           type: number
           format: double
@@ -4605,7 +4617,7 @@ components:
       description: >-
         Чип-переход под ответом (и событие chip). Неизвестный screen, period или некорректный ключ — пропустить
         этот чип, продолжить показ ответа. До отдельного согласования возможностей assistant не генерирует,
-        не сохраняет и не отдаёт all_time-чипы в потоке/snapshot/истории.
+        не сохраняет и не отдаёт all_time/rolling_year/rolling_quarter-чипы в потоке/snapshot/истории.
       required:
       - label
       - screen
@@ -4628,7 +4640,7 @@ components:
           nullable: true
           allOf:
           - $ref: '#/components/schemas/AnalyticsParams'
-          description: Для analytics — только month/quarter/year; all_time запрещён до отдельного согласования возможностей.
+          description: Для analytics — только month/quarter/year; all_time/rolling_year/rolling_quarter запрещены до отдельного согласования возможностей.
           type: object
     AnswerSource:
       type: object

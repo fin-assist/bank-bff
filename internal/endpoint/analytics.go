@@ -21,6 +21,10 @@ func periodType(value string) (commonv1.PeriodType, bool) {
 		return commonv1.PeriodType_PERIOD_TYPE_QUARTER, true
 	case "year":
 		return commonv1.PeriodType_PERIOD_TYPE_YEAR, true
+	case "rolling_year":
+		return commonv1.PeriodType_PERIOD_TYPE_ROLLING_YEAR, true
+	case "rolling_quarter":
+		return commonv1.PeriodType_PERIOD_TYPE_ROLLING_QUARTER, true
 	case "all_time":
 		return commonv1.PeriodType_PERIOD_TYPE_ALL_TIME, true
 	default:
@@ -81,7 +85,7 @@ func (d Deps) analytics(c *rest.Call) {
 		return
 	}
 	conv := converter{loc: zone(resp.GetTimeZone()), metrics: c.Metrics}
-	out, ok := conv.analytics(resp)
+	out, ok := conv.analytics(resp, period)
 	if !ok {
 		rest.Internal().Write(c.W)
 		return

@@ -15,7 +15,7 @@ import (
 )
 
 // Source records the fin-assist/contracts commit the embedded copy was taken from.
-const Source = "fin-assist/contracts 22c5213615e60e5a6d74ac160cd859ead8084ff6 openapi/openapi.yaml"
+const Source = "fin-assist/contracts d827664bedfa83718db3c638dfe377bf8dfd48fb openapi/openapi.yaml"
 
 //go:embed openapi.yaml
 var document []byte
