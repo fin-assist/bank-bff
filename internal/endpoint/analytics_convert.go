@@ -77,6 +77,8 @@ type analyticsAction struct {
 	Filter    *OperationsFilter `json:"filter,omitempty"`
 	PaymentID *string           `json:"payment_id,omitempty"`
 	Label     *string           `json:"label,omitempty"`
+	Period    *string           `json:"period,omitempty"`
+	Date      *string           `json:"date,omitempty"`
 }
 
 func (c converter) coverageCode(v commonv1.Coverage, field string) string {
@@ -104,7 +106,12 @@ func (c converter) analyticsBlock(b *commonv1.Block) analyticsBlock {
 		out.Lock = &analyticsLock{Reason: l.GetReason(), Text: text, Required: l.Required, Available: l.Available, AvailableFrom: optionalMoment(l.AvailableFrom, c.loc)}
 	}
 	if a := b.GetAction(); a != nil {
-		out.Action = &analyticsAction{Type: a.GetType(), Filter: operationsFilter(a.Filter, c.loc), PaymentID: a.PaymentId, Label: a.Label}
+		out.Action = &analyticsAction{Type: a.GetType(), Filter: operationsFilter(a.Filter, c.loc), PaymentID: a.PaymentId, Label: a.Label, Date: a.PeriodKey}
+		if a.Period != nil {
+			if period, ok := enumCode(a.GetPeriod()); ok {
+				out.Action.Period = &period
+			}
+		}
 	}
 	return out
 }
@@ -129,7 +136,7 @@ func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse) (analyticsR
 	if _, ok := enumCode(pms.GetPeriod()); !ok {
 		return c.analyticsInvalid("GetAnalyticsResponse.params.period", "unknown")
 	}
-	if !c.analyticsPeriodKey(pms.GetPeriodKey(), "GetAnalyticsResponse.params.period_key") {
+	if !c.analyticsPeriodKey(pms.GetPeriod(), pms.GetPeriodKey(), "GetAnalyticsResponse.params.period_key") {
 		return analyticsResponse{}, false
 	}
 	out.Params, _ = analyticsParams(pms)
@@ -228,13 +235,35 @@ func (c converter) analyticsRange(value *commonv1.TimeRange, field string) bool 
 // analyticsKeyShape is PeriodKey from the embedded OpenAPI. These are calendar
 // labels, never instants; validating syntax does not convert or choose a period.
 var analyticsKeyShape = regexp.MustCompile(`^[0-9]{4}(-(0[1-9]|1[0-2])|-Q[1-4])?$`)
+var analyticsMonthKey = regexp.MustCompile(`^[0-9]{4}-(0[1-9]|1[0-2])$`)
+var analyticsQuarterKey = regexp.MustCompile(`^[0-9]{4}-Q[1-4]$`)
+var analyticsYearKey = regexp.MustCompile(`^[0-9]{4}$`)
 
-func (c converter) analyticsPeriodKey(value, field string) bool {
+func analyticsKeyMatches(period commonv1.PeriodType, value string) bool {
+	switch period {
+	case commonv1.PeriodType_PERIOD_TYPE_MONTH:
+		return analyticsMonthKey.MatchString(value)
+	case commonv1.PeriodType_PERIOD_TYPE_QUARTER:
+		return analyticsQuarterKey.MatchString(value)
+	case commonv1.PeriodType_PERIOD_TYPE_YEAR:
+		return analyticsYearKey.MatchString(value)
+	case commonv1.PeriodType_PERIOD_TYPE_ALL_TIME:
+		return value == "all_time"
+	default:
+		return false
+	}
+}
+
+func (c converter) analyticsPeriodKey(period commonv1.PeriodType, value, field string) bool {
 	if value == "" {
 		c.metrics.Untranslated(field, "absent")
 		return false
 	}
-	if !analyticsKeyShape.MatchString(value) {
+	valid := analyticsKeyShape.MatchString(value)
+	if period == commonv1.PeriodType_PERIOD_TYPE_ALL_TIME {
+		valid = value == "all_time"
+	}
+	if !valid {
 		c.metrics.Untranslated(field, "invalid")
 		return false
 	}
