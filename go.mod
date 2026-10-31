@@ -3,7 +3,7 @@ module github.com/fin-assist/bank-bff
 go 1.26.0
 
 require (
-	github.com/fin-assist/contracts/gen/go v0.7.0
+	github.com/fin-assist/contracts/gen/go v0.9.0
 	github.com/fin-assist/go-grpc v0.2.0
 	github.com/fin-assist/go-identity v0.2.0
 	github.com/getkin/kin-openapi v0.133.0

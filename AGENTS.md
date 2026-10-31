@@ -39,7 +39,7 @@ ENV=dev builds no public API (NewAssembly refuses dev): no auth bypass. Pre-stre
 JSON; streams extend their own connection deadlines and have their own deadline and caps.
 Add an infrastructure dependency only for a real endpoint/usecase; no dummy code for coverage.
 
-Current tagged contracts/gen/go is v0.7.0 (FIN-363, merged 928bac0). FIN-342 REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
+Current tagged contracts/gen/go is v0.9.0 (FIN-413, merged d827664). FIN-342 REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
 the declared safety of the entire REST operation; an unknown keyed POST replay window stays false.
 Do not infer permission from an error code, HTTP status, RetryInfo, text or UUID. Nested result Status
 is decoded only by finerr.DecodeResultStatus: valid canonical reason wins, present-invalid never reads
@@ -167,3 +167,5 @@ Shared lint and script tests require Python 3.11+ with PyYAML.
 
 
 If a pinned revision changes common/bootstrap.py, synchronize its exact scripts/common_ci.py copy in the same PR; Renovate updates SHA references only. Rollback restores both pins and the matching bootstrap bytes. Byte equality keeps an incomplete update red; a manual copy update is not a bot-only FIN-211 update.
+
+FIN-411: REST analytics/periods accept rolling_year and rolling_quarter, pass the exact request and both transfer modes to analytics, and preserve opaque financial blocks/edge ranges unchanged. New singleton producer keys are validated against their type; navigation is absent. Assistant chips remain calendar-only. Canonical contract is d827664 / gen/go v0.9.0; rollout analytics → producer → BFF/Android, no deployment in this PR.

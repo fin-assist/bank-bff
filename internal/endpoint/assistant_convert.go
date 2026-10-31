@@ -155,7 +155,7 @@ func (c converter) chip(ch *assistantv1.Chip) (Chip, bool) {
 		return out, true
 	case assistantv1.ChipScreen_CHIP_SCREEN_ANALYTICS:
 		params, ok := analyticsParams(ch.Params)
-		if !ok {
+		if !ok || !calendarAnalyticsKey(ch.GetParams().GetPeriod(), ch.GetParams().GetPeriodKey()) {
 			break
 		}
 		out.Screen, out.Params = "analytics", params
