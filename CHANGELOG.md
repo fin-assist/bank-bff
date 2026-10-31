@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- FIN-391: добавлены unit/API-регрессии для трёх несовместимых пар типа/даты аналитики: canonical date/INVALID_FORMAT переводится в HTTP400, неполная ошибка producer без reason остаётся HTTP500. Runtime и строгий decoder не меняются.
+
 - FIN-372: CI и линтеры используют общий источник `fin-assist/go-ci` по неизменяемому SHA; локальные команды и тесты скриптов используют проверенный кэш. Обновление и откат синхронизируют pins и копию bootstrap в одном PR. Runtime и публичный API не меняются.
 
 - FIN-364: contracts/gen/go v0.7.0 и точная OpenAPI-копия merged `928bac0` (FIN-363). POST /v1/auth/phone требует phone, pd_consent_accepted, pd_consent_version (1–64 Unicode-символа), age_confirmed; четыре значения передаются USER вместе с доверенным IP/ключом. False остаётся сервисной проверкой после ключа/лимитов; добавлены 403 CONSENT_REQUIRED и 422 CONSENT_OUTDATED. Register подтверждает исходную receipt-версию без повторного чтения текущего документа; provider/evidence остаются в USER. Retry/no-store, сроки ответа и отсутствие скрытого повтора Start сохранены; условия совместной выкладки — docs/config.md.
