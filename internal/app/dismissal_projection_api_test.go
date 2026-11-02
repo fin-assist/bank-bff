@@ -136,7 +136,7 @@ func TestAPIComposerFailuresAfterCommitCannotClaimMissingAssignment(t *testing.T
 		}
 	})
 	r := b.do(t, req)
-	if r.StatusCode != 500 || r.Header.Get("Retry-After") == "" || r.json["error"].(map[string]any)["retryable"] != true {
+	if r.StatusCode != 500 || r.Header.Get("Retry-After") != "" || r.json["error"].(map[string]any)["retry_at"] != nil || r.json["error"].(map[string]any)["retryable"] != true {
 		t.Fatal(r.StatusCode, string(r.body), r.Header)
 	}
 }

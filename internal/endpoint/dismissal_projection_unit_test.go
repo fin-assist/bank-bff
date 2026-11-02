@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
@@ -118,6 +119,7 @@ func TestUnitDismissalComposerRefusalsRemainUnknownWrites(t *testing.T) {
 		{"malformed validation", finerr.WithRequestRetryInfo(finerr.ValidationError(), true), 500, false},
 		{"not found", finerr.WithRequestRetryInfo(finerr.NotFound(), false), 500, false},
 		{"saved context", finerr.WithRequestRetryInfo(finerr.AnalyticsContextUnavailable(), false), 500, false},
+		{"rate limited", finerr.WithRequestRetryInfo(finerr.RateLimited(time.Now().Add(time.Minute)), true), 500, true},
 		{"authentication", finerr.TokenRevoked(), 401, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -132,7 +134,7 @@ func TestUnitDismissalComposerRefusalsRemainUnknownWrites(t *testing.T) {
 				return nil, tc.err
 			}
 			r := u.serve(t, "PUT", "/v1/analytics/regular-payments/"+testKey+"/dismissal?date=2026-09&transfer_mode=with", "", nil)
-			if r.Code != tc.status || r.json["error"].(map[string]any)["retryable"] != tc.retry || writes != 1 || applies != 1 || strings.Contains(r.Body.String(), "SECRET") {
+			if r.Code != tc.status || r.json["error"].(map[string]any)["retryable"] != tc.retry || writes != 1 || applies != 1 || strings.Contains(r.Body.String(), "SECRET") || r.Header().Get("Retry-After") != "" || r.json["error"].(map[string]any)["retry_at"] != nil {
 				t.Fatal(r.Code, r.Body.String(), writes, applies)
 			}
 		})

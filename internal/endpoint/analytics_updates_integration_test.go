@@ -85,28 +85,21 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 			return &statementdatav1.GetImportConfigResponse{TimeZone: "Europe/Moscow"}, nil
 		}
 	})
-	mux := http.NewServeMux()
-	for _, route := range []struct {
-		method, path string
-		handle       func(*rest.Call)
-	}{{"PUT", "/v1/analytics/regular-payments/{id}/dismissal", deps.dismissRegularPayment}, {"GET", "/v1/analytics/charts/monthly_chart", deps.analyticsChartPage}, {"GET", "/v1/statements/config", deps.importConfig}} {
-		op, e := spec.Operation(route.method, route.path)
-		if e != nil {
-			t.Fatal(e)
-		}
-		mux.HandleFunc(route.method+" "+route.path, func(w http.ResponseWriter, r *http.Request) {
-			if details := rest.Validate(r.Context(), r, op, map[string]string{"id": r.PathValue("id")}, nil); len(details) > 0 {
-				rest.Validation(details...).Write(w)
-				return
-			}
-			route.handle(&rest.Call{W: w, R: r, Metrics: metrics, Log: slog.New(slog.DiscardHandler), Op: op})
-		})
-	}
 	auth, err := identity.NewHTTP(unitUserChecker{}, func(w http.ResponseWriter, _ *http.Request, _ error) { rest.InvalidToken().Write(w) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(auth.Middleware(mux))
+	handler, err := rest.Handler(rest.Config{Spec: spec, BodyLimit: rest.MinBodyLimit, Metrics: metrics,
+		Log: slog.New(slog.DiscardHandler), Clock: time.Now, Authenticate: auth.Middleware,
+		Gates: rest.Gates{MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}}, Clock: time.Now}}, []rest.Route{
+		{Method: "PUT", Path: "/v1/analytics/regular-payments/{id}/dismissal", Protected: rest.Always, ReplaySafe: true, Handle: deps.dismissRegularPayment},
+		{Method: "GET", Path: "/v1/analytics/charts/monthly_chart", Protected: rest.Always, ReplaySafe: true, Handle: deps.analyticsChartPage},
+		{Method: "GET", Path: "/v1/statements/config", Protected: rest.Always, ReplaySafe: true, Handle: deps.importConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	client := &http.Client{Timeout: 5 * time.Second}
 	call := func(method, path string) (int, map[string]any) {
@@ -130,6 +123,9 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 		if e = json.Unmarshal(raw, &body); e != nil {
 			t.Fatal(e, string(raw))
 		}
+		if r.StatusCode == http.StatusInternalServerError && r.Header.Get("Retry-After") != "" {
+			t.Fatal("INTERNAL_ERROR retained another code's wait", r.Header)
+		}
 		return r.StatusCode, body
 	}
 	path := "/v1/analytics/regular-payments/" + testKey + "/dismissal"
@@ -140,6 +136,23 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 	code, _ = call("PUT", path+"?date=0000-01&transfer_mode=with")
 	if code != 400 || writes.Load() != 1 {
 		t.Fatal(code, writes.Load())
+	}
+	for _, failure := range []error{finerr.AnalyticsContextUnavailable(), finerr.RateLimited(time.Now().Add(time.Minute))} {
+		for _, permission := range []bool{false, true} {
+			peers.Analytics.Set(func(a *testpeer.Analytics) {
+				a.ApplyFunc = func(context.Context, *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+					return nil, finerr.WithRequestRetryInfo(failure, permission)
+				}
+			})
+			beforeWrites := writes.Load()
+			beforeApply := len(peers.Calls(analyticsv1.AnalyticsService_ApplyRegularPaymentDismissal_FullMethodName))
+			code, out = call("PUT", path+"?date=2026-09&transfer_mode=with")
+			problem := out["error"].(map[string]any)
+			if code != 500 || problem["code"] != "INTERNAL_ERROR" || problem["retryable"] != permission || problem["retry_at"] != nil ||
+				writes.Load() != beforeWrites+1 || len(peers.Calls(analyticsv1.AnalyticsService_ApplyRegularPaymentDismissal_FullMethodName)) != beforeApply+1 {
+				t.Fatal(code, out, writes.Load())
+			}
+		}
 	}
 	peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
 		p.DismissRegularPaymentFunc = func(context.Context, *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
