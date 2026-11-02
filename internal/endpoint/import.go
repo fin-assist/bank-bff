@@ -31,9 +31,17 @@ const (
 func (d Deps) importConfig(c *rest.Call) {
 	ctx, cancel := unary(c)
 	defer cancel()
-	resp, err := d.Statements.GetImportConfig(ctx, &statementdatav1.GetImportConfigRequest{})
+	req, ok := importConfigRequest(c)
+	if !ok {
+		return
+	}
+	resp, err := d.Statements.GetImportConfig(ctx, req)
 	if err != nil {
 		c.Fail(err)
+		return
+	}
+	if !validSourceZone(resp.GetTimeZone(), true) {
+		rest.Internal().Write(c.W)
 		return
 	}
 	rest.WriteJSON(c.W, http.StatusOK, d.converter(c, resp.GetTimeZone()).importConfig(resp))
@@ -237,6 +245,10 @@ func (d Deps) watchUpload(c *rest.Call) {
 		c.Fail(err)
 		return
 	}
+	if first.GetComplete() != nil && !validSourceZone(first.GetTimeZone(), true) {
+		rest.Internal().Write(c.W)
+		return
+	}
 	sse, err := rest.StartStream(c.W)
 	if err != nil {
 		c.Log.WarnContext(ctx, "stream start failed")
@@ -244,6 +256,9 @@ func (d Deps) watchUpload(c *rest.Call) {
 	}
 	defer c.Metrics.StreamOpened(c.Op.Route.Path)()
 	send := func(m *statementdatav1.WatchUploadResponse) (bool, error) {
+		if m.GetComplete() != nil && !validSourceZone(m.GetTimeZone(), true) {
+			return true, errors.New("invalid import source time zone")
+		}
 		name, data, terminal, known := d.converter(c, m.GetTimeZone()).importEvent(m)
 		if !known {
 			return false, nil

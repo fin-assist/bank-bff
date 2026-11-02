@@ -39,7 +39,13 @@ func zone(name string) *time.Location {
 // moment formats a Timestamp in loc as RFC 3339 with an offset; fractions are kept
 // when present so a value read back is exact.
 func moment(ts *timestamppb.Timestamp, loc *time.Location) string {
-	return ts.AsTime().In(loc).Format(time.RFC3339Nano)
+	value := ts.AsTime().In(loc)
+	// RFC3339 offsets have minute precision. Preserve the instant for historical
+	// IANA offsets with seconds; the source time_zone carries the civil calendar.
+	if _, offset := value.Zone(); offset%60 != 0 {
+		value = value.UTC()
+	}
+	return value.Format(time.RFC3339Nano)
 }
 
 // optionalMoment is moment for an optional field: nil stays absent.

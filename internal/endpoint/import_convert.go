@@ -12,6 +12,7 @@ import (
 
 // ImportConfig is the import screen configuration (REST 3.1).
 type ImportConfig struct {
+	TimeZone         string         `json:"time_zone"`
 	DownloadURL      string         `json:"download_url"`
 	LoginURL         string         `json:"login_url"`
 	MaxFileSizeBytes int64          `json:"max_file_size_bytes"`
@@ -79,6 +80,7 @@ type ImportError struct {
 
 // ImportResult is the complete event. All business numbers come from the service.
 type ImportResult struct {
+	TimeZone             string            `json:"time_zone"`
 	OperationCount       int64             `json:"operation_count"`
 	NewCount             int64             `json:"new_count"`
 	DuplicateCount       int64             `json:"duplicate_count"`
@@ -163,7 +165,7 @@ type UnreadLine struct {
 }
 
 func (c converter) importConfig(m *statementdatav1.GetImportConfigResponse) ImportConfig {
-	out := ImportConfig{DownloadURL: m.GetDownloadUrl(), LoginURL: m.GetLoginUrl(), MaxFileSizeBytes: m.GetMaxFileSizeBytes(),
+	out := ImportConfig{TimeZone: m.GetTimeZone(), DownloadURL: m.GetDownloadUrl(), LoginURL: m.GetLoginUrl(), MaxFileSizeBytes: m.GetMaxFileSizeBytes(),
 		AcceptedFormats: append([]string{}, m.GetAcceptedFormats()...), SuggestedPeriod: timeRange(m.GetSuggestedPeriod(), c.loc)}
 	if m.GetLoaded() != nil {
 		l := m.GetLoaded()
@@ -242,7 +244,7 @@ func (c converter) coverage(m *statementdatav1.ImportCoverage) ImportCoverage {
 }
 
 func (c converter) importResult(m *statementdatav1.ImportResult) ImportResult {
-	out := ImportResult{OperationCount: m.GetOperationCount(), NewCount: m.GetNewCount(), DuplicateCount: m.GetDuplicateCount(), UnreadCount: m.GetUnreadCount(), FirstOperationAt: optionalMoment(m.GetFirstOperationAt(), c.loc), LastOperationAt: optionalMoment(m.GetLastOperationAt(), c.loc), IsFirstImport: m.GetIsFirstImport(), Accounts: []ImportAccount{}, CategorizedCount: m.GetCategorizedCount(), OwnTransferCount: m.GetOwnTransferCount(), UncategorizedCount: m.GetUncategorizedCount(), UncategorizedFilters: operationsFilter(m.GetUncategorizedFilters(), c.loc), Currency: "RUB", Coverage: c.coverage(m.GetCoverage()), Notices: []ImportNotice{}}
+	out := ImportResult{TimeZone: c.loc.String(), OperationCount: m.GetOperationCount(), NewCount: m.GetNewCount(), DuplicateCount: m.GetDuplicateCount(), UnreadCount: m.GetUnreadCount(), FirstOperationAt: optionalMoment(m.GetFirstOperationAt(), c.loc), LastOperationAt: optionalMoment(m.GetLastOperationAt(), c.loc), IsFirstImport: m.GetIsFirstImport(), Accounts: []ImportAccount{}, CategorizedCount: m.GetCategorizedCount(), OwnTransferCount: m.GetOwnTransferCount(), UncategorizedCount: m.GetUncategorizedCount(), UncategorizedFilters: operationsFilter(m.GetUncategorizedFilters(), c.loc), Currency: "RUB", Coverage: c.coverage(m.GetCoverage()), Notices: []ImportNotice{}}
 	if t := m.GetTotals(); t != nil {
 		scope, ok := enumCode(t.GetScope())
 		if !ok {

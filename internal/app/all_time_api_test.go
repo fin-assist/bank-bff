@@ -185,14 +185,14 @@ func TestAPIAllTimeEmptyAndCanonicalValidation(t *testing.T) {
 				requests <- proto.Clone(in).(*analyticsv1.GetAnalyticsRequest)
 				return nil, finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "date", Reason: "INVALID_FORMAT", Description: "private synthetic diagnostic"})
 			}
-			return &analyticsv1.GetAnalyticsResponse{HasData: false, Blocks: allTimeAPIMessage(t).Blocks}, nil
+			return &analyticsv1.GetAnalyticsResponse{Calculation: &commonv1.CalculationState{}, HasData: false, Blocks: allTimeAPIMessage(t).Blocks}, nil
 		}
 		a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
 			return &analyticsv1.ListPeriodsResponse{}, nil
 		}
 	})
 	r := b.do(t, request{method: "GET", path: "/v1/analytics?period=all_time", route: "/v1/analytics", header: auth})
-	if r.StatusCode != 200 || !reflect.DeepEqual(r.json, map[string]any{"has_data": false}) {
+	if r.StatusCode != 200 || !reflect.DeepEqual(r.json, map[string]any{"has_data": false, "calculation": map[string]any{"calc_version": 0.0, "recalculating": false}}) {
 		t.Fatal(r.StatusCode, string(r.body))
 	}
 	r = b.do(t, request{method: "GET", path: "/v1/analytics/periods?period=all_time", route: "/v1/analytics/periods", header: auth})

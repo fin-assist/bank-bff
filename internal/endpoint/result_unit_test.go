@@ -165,7 +165,8 @@ func TestUnitCanonicalResultMetricsAreBoundedAndIgnoreUnspecifiedAlias(t *testin
 
 func TestUnitRouteReplaySafetyDeclarations(t *testing.T) {
 	safe := map[string]bool{
-		"GET /v1/operations": true, "GET /v1/operations/{id}": true, "PATCH /v1/operations/{id}": true, "GET /v1/categories": true,
+		"GET /v1/analytics/charts/monthly_chart": true,
+		"GET /v1/operations":                     true, "GET /v1/operations/{id}": true, "PATCH /v1/operations/{id}": true, "GET /v1/categories": true,
 		"PUT /v1/analytics/regular-payments/{id}/dismissal": true, "DELETE /v1/analytics/regular-payments/{id}/dismissal": true,
 		"GET /v1/analytics": true, "GET /v1/analytics/periods": true,
 		"GET /v1/statements/config": true, "GET /v1/statements": true, "GET /v1/statements/{upload_id}/progress": true, "DELETE /v1/statements/{upload_id}": true, "GET /v1/statements/unread-lines": true,
@@ -175,7 +176,7 @@ func TestUnitRouteReplaySafetyDeclarations(t *testing.T) {
 		"GET /v1/assistant/messages": true, "GET /v1/assistant/messages/{answer_id}/events": true, "GET /v1/assistant/limit": true,
 	}
 	routes := (Deps{}).Routes()
-	if len(routes) != 30 {
+	if len(routes) != 31 {
 		t.Fatalf("unexpected endpoint scope: %d", len(routes))
 	}
 	found := 0

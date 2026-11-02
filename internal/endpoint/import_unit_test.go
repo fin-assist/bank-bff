@@ -93,7 +93,7 @@ func TestUnitImportRoutesAndStreamingValidation(t *testing.T) {
 	f := u.statements
 	at := timestamppb.New(time.Now())
 	r := &commonv1.TimeRange{Start: at, End: at}
-	f.config = &statementdatav1.GetImportConfigResponse{DownloadUrl: "https://bank.test", LoginUrl: "https://bank.test", MaxFileSizeBytes: MaxImportFileBytes, SuggestedPeriod: r, AcceptedFormats: []string{"OFX"}, Loaded: &statementdatav1.LoadedSummary{FirstOperationAt: at, LastOperationAt: at, OperationCount: 1}}
+	f.config = &statementdatav1.GetImportConfigResponse{TimeZone: "Europe/Moscow", DownloadUrl: "https://bank.test", LoginUrl: "https://bank.test", MaxFileSizeBytes: MaxImportFileBytes, SuggestedPeriod: r, AcceptedFormats: []string{"OFX"}, Loaded: &statementdatav1.LoadedSummary{FirstOperationAt: at, LastOperationAt: at, OperationCount: 1}}
 	f.list = &statementdatav1.ListUploadsResponse{Summary: &statementdatav1.UploadsSummary{FirstOperationAt: at, LastOperationAt: at, Gaps: []*commonv1.TimeRange{r}}, Uploads: []*statementdatav1.Upload{{UploadId: "u1", UploadedAt: at, Status: 99, PeriodFrom: proto.String("2026-01-01"), PeriodTo: proto.String("2026-01-02"), ResolvedUnreadCount: 2, ResolvedByUploadedAt: at}, {UploadedAt: at, Status: 1, PeriodFrom: proto.String("2026-01-01")}}}
 	f.unread = &statementdatav1.ListUnreadLinesResponse{Lines: []*statementdatav1.UnreadLine{{Reason: 1, LineNumber: 1}}}
 	for _, path := range []string{"/v1/statements/config", "/v1/statements", "/v1/statements/unread-lines?upload_id=u1", "/v1/statements/unread-lines?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z"} {
@@ -204,11 +204,11 @@ func TestUnitImportProjectionAndCanonicalPrecedence(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	for _, event := range []*statementdatav1.WatchUploadResponse{{}, {Event: &statementdatav1.WatchUploadResponse_Progress{Progress: &statementdatav1.ImportProgress{Stage: 99, Percent: 1}}}, {Event: &statementdatav1.WatchUploadResponse_Complete{Complete: m}}, {Event: &statementdatav1.WatchUploadResponse_Error{Error: &statementdatav1.ImportStreamError{Code: 2}}}} {
+	for _, event := range []*statementdatav1.WatchUploadResponse{{}, {Event: &statementdatav1.WatchUploadResponse_Progress{Progress: &statementdatav1.ImportProgress{Stage: 99, Percent: 1}}}, {TimeZone: "Europe/Moscow", Event: &statementdatav1.WatchUploadResponse_Complete{Complete: m}}, {Event: &statementdatav1.WatchUploadResponse_Error{Error: &statementdatav1.ImportStreamError{Code: 2}}}} {
 		_, _, _, _ = c.importEvent(event)
 	}
 	u := newUnitAPI(t, rest.StreamLimits{})
-	u.statements.watch = []*statementdatav1.WatchUploadResponse{{Event: &statementdatav1.WatchUploadResponse_Complete{Complete: m}}}
+	u.statements.watch = []*statementdatav1.WatchUploadResponse{{TimeZone: "Europe/Moscow", Event: &statementdatav1.WatchUploadResponse_Complete{Complete: m}}}
 	if got := u.serve(t, http.MethodGet, "/v1/statements/u1/progress", "", nil); got.Code != 200 {
 		t.Fatal(got.Code)
 	}

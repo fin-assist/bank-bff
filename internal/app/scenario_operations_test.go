@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
 	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
 	"github.com/fin-assist/contracts/gen/go/finerr"
@@ -36,7 +37,7 @@ func feedMessage() *statementdatav1.ListFeedResponse {
 
 func scenarioOperations(t *testing.T, start starter) {
 	b := start(t, nil)
-	access := b.keys.Access("u1")
+	access := b.keys.Access(testpeer.UserID)
 	auth := base(map[string]string{"Authorization": "Bearer " + access, "X-Read-Primary": "1", "Idempotency-Key": "not-a-key", "X-User-Id": "u2", "Cookie": "secret=value"})
 	var mu sync.Mutex
 	var before *timestamppb.Timestamp
@@ -125,7 +126,7 @@ func scenarioOperations(t *testing.T, start starter) {
 
 func scenarioOperationMutations(t *testing.T, start starter) {
 	b := start(t, nil)
-	access := b.keys.Access("u1")
+	access := b.keys.Access(testpeer.UserID)
 	auth := base(map[string]string{"Authorization": "Bearer " + access, "Idempotency-Key": "not-a-key", "X-User-Id": "u2"})
 	b.peers.Operations.Set(func(p *testpeer.Operations) {
 		p.GetOperationFunc = func(ctx context.Context, in *statementdatav1.GetOperationRequest) (*statementdatav1.GetOperationResponse, error) {
@@ -200,7 +201,7 @@ func scenarioOperationMutations(t *testing.T, start starter) {
 			if in.RegularPaymentId != idemKey {
 				t.Error(in)
 			}
-			return &statementdatav1.DismissRegularPaymentResponse{}, nil
+			return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 8, Projection: dismissalAPIProjection(in.Params)}, nil
 		}
 		p.RestoreRegularPaymentFunc = func(ctx context.Context, in *statementdatav1.RestoreRegularPaymentRequest) (*statementdatav1.RestoreRegularPaymentResponse, error) {
 			profileDeadline(t, ctx)
@@ -210,10 +211,21 @@ func scenarioOperationMutations(t *testing.T, start starter) {
 			return &statementdatav1.RestoreRegularPaymentResponse{}, nil
 		}
 	})
+	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+		a.ApplyFunc = func(_ context.Context, in *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+			return dismissalAPIResponse(in), nil
+		}
+	})
 	for _, method := range []string{"PUT", "DELETE"} {
 		for range 2 {
-			r = b.do(t, request{method: method, path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal", route: "/v1/analytics/regular-payments/{id}/dismissal", header: auth})
-			if r.StatusCode != 204 || len(r.body) != 0 || r.Header.Get("Content-Type") != "" {
+			path := "/v1/analytics/regular-payments/" + idemKey + "/dismissal"
+			want := 204
+			if method == "PUT" {
+				path += "?date=2026-09&transfer_mode=with"
+				want = 200
+			}
+			r = b.do(t, request{method: method, path: path, route: "/v1/analytics/regular-payments/{id}/dismissal", header: auth})
+			if r.StatusCode != want {
 				t.Fatal(r.StatusCode, string(r.body))
 			}
 		}
@@ -266,7 +278,7 @@ func operationErrorEndpoints() []failingOperation {
 				}
 			})
 		}},
-		{request{method: "PUT", path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal", route: "/v1/analytics/regular-payments/{id}/dismissal"}, statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName, declared(400, 401, 404, 429, 500, 503), func(p *testpeer.Peers, err error) {
+		{request{method: "PUT", path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal?date=2026-09&transfer_mode=with", route: "/v1/analytics/regular-payments/{id}/dismissal"}, statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName, declared(400, 401, 404, 422, 429, 500, 503), func(p *testpeer.Peers, err error) {
 			p.RegularPayments.Set(func(o *testpeer.RegularPayments) {
 				o.DismissRegularPaymentFunc = func(context.Context, *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
 					return nil, err
@@ -284,7 +296,7 @@ func operationErrorEndpoints() []failingOperation {
 }
 func scenarioOperationsErrorsAndGates(t *testing.T, start starter) {
 	b := start(t, nil)
-	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access(testpeer.UserID)})
 	failures := registry(finerr.InvalidToken(), finerr.TokenRevoked(), finerr.RateLimited(retryAt()), finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "occurred_at", Reason: "INVALID_FORMAT", Description: "SECRET"}), finerr.NotFound(), finerr.TooManyResults(), finerr.SelectionNotFound(), finerr.CategoryNotAssignable(), finerr.InternalError(), finerr.WithRequestRetryInfo(finerr.InternalError(), true))
 	failures = append(failures, peerError{err: errors.New("SECRET_TRANSPORT"), status: 500, code: "INTERNAL_ERROR"})
 	for _, op := range operationErrorEndpoints() {
@@ -372,12 +384,12 @@ func scenarioOperationsErrorsAndGates(t *testing.T, start starter) {
 
 func scenarioOperationLargeSearch(t *testing.T, start starter) {
 	b := start(t, nil)
-	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access(testpeer.UserID)})
 	item := operationMessage()
 	item.Title = strings.Repeat("x", 5<<20)
 	b.peers.Operations.Set(func(p *testpeer.Operations) {
 		p.SearchOperationsFunc = func(context.Context, *statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
-			return &statementdatav1.SearchOperationsResponse{Items: []*statementdatav1.Operation{item}, TotalCount: 1}, nil
+			return &statementdatav1.SearchOperationsResponse{TimeZone: "Asia/Vladivostok", Items: []*statementdatav1.Operation{item}, TotalCount: 1}, nil
 		}
 		p.GetOperationFunc = func(context.Context, *statementdatav1.GetOperationRequest) (*statementdatav1.GetOperationResponse, error) {
 			return &statementdatav1.GetOperationResponse{Operation: item}, nil
@@ -395,7 +407,7 @@ func scenarioOperationLargeSearch(t *testing.T, start starter) {
 	item.Title = strings.Repeat("x", 17<<20)
 	b.peers.Operations.Set(func(p *testpeer.Operations) {
 		p.SearchOperationsFunc = func(context.Context, *statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
-			return &statementdatav1.SearchOperationsResponse{Items: []*statementdatav1.Operation{item}, TotalCount: 1}, nil
+			return &statementdatav1.SearchOperationsResponse{TimeZone: "Asia/Vladivostok", Items: []*statementdatav1.Operation{item}, TotalCount: 1}, nil
 		}
 	})
 	r = b.do(t, request{method: "GET", path: "/v1/operations?q=x", route: "/v1/operations", header: auth})
@@ -406,7 +418,7 @@ func scenarioOperationLargeSearch(t *testing.T, start starter) {
 
 func scenarioOperationMalformed(t *testing.T, start starter) {
 	b := start(t, nil)
-	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access(testpeer.UserID)})
 	for _, mutate := range []func(*statementdatav1.Operation){func(o *statementdatav1.Operation) { o.Kind = 99 }, func(o *statementdatav1.Operation) { o.Status = 0 }, func(o *statementdatav1.Operation) { o.Currency = "" }, func(o *statementdatav1.Operation) { o.AmountMinor = -1 }, func(o *statementdatav1.Operation) { o.OccurredAt = nil }, func(o *statementdatav1.Operation) { o.OccurredAt.Nanos = -1 }, func(o *statementdatav1.Operation) { o.PostedAt = &timestamppb.Timestamp{Nanos: -1} }} {
 		item := operationMessage()
 		mutate(item)
@@ -439,7 +451,7 @@ func scenarioOperationMalformed(t *testing.T, start starter) {
 // old ID after a split/join hides the applied result behind a new NOT_FOUND.
 func scenarioOperationMutationTransportLoss(t *testing.T, start starter) {
 	b := start(t, nil)
-	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access(testpeer.UserID)})
 	for _, joining := range []bool{false, true} {
 		var mu sync.Mutex
 		applied := false
@@ -509,7 +521,11 @@ func scenarioOperationMutationTransportLoss(t *testing.T, start starter) {
 				return nil, status.Error(codes.Unavailable, "assignment committed")
 			}
 		})
-		got := b.do(t, request{method: method, path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal", route: "/v1/analytics/regular-payments/{id}/dismissal", header: auth})
+		path := "/v1/analytics/regular-payments/" + idemKey + "/dismissal"
+		if method == "PUT" {
+			path += "?date=2026-09&transfer_mode=with"
+		}
+		got := b.do(t, request{method: method, path: path, route: "/v1/analytics/regular-payments/{id}/dismissal", header: auth})
 		if got.StatusCode != 500 || calls.Load() != 1 {
 			t.Fatal("assignment was replayed", method, calls.Load(), got.StatusCode)
 		}
@@ -518,7 +534,7 @@ func scenarioOperationMutationTransportLoss(t *testing.T, start starter) {
 
 func scenarioOperationOtherMalformed(t *testing.T, start starter) {
 	b := start(t, nil)
-	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access(testpeer.UserID)})
 	cases := []struct {
 		name, method, path, route, body, field, code string
 		setup                                        func(*testpeer.Peers)
@@ -526,7 +542,7 @@ func scenarioOperationOtherMalformed(t *testing.T, start starter) {
 		{name: "search nil item", method: "GET", path: "/v1/operations?q=x", route: "/v1/operations", field: "Operation.kind", code: "unknown", setup: func(p *testpeer.Peers) {
 			p.Operations.Set(func(o *testpeer.Operations) {
 				o.SearchOperationsFunc = func(context.Context, *statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
-					return &statementdatav1.SearchOperationsResponse{Items: []*statementdatav1.Operation{nil}}, nil
+					return &statementdatav1.SearchOperationsResponse{TimeZone: "Asia/Vladivostok", Items: []*statementdatav1.Operation{nil}}, nil
 				}
 			})
 		}},
@@ -535,7 +551,7 @@ func scenarioOperationOtherMalformed(t *testing.T, start starter) {
 				o.SearchOperationsFunc = func(context.Context, *statementdatav1.SearchOperationsRequest) (*statementdatav1.SearchOperationsResponse, error) {
 					item := operationMessage()
 					item.Status = 99
-					return &statementdatav1.SearchOperationsResponse{Items: []*statementdatav1.Operation{item}}, nil
+					return &statementdatav1.SearchOperationsResponse{TimeZone: "Asia/Vladivostok", Items: []*statementdatav1.Operation{item}}, nil
 				}
 			})
 		}},

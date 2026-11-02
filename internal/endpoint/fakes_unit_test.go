@@ -16,12 +16,15 @@ import (
 	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
+	"github.com/fin-assist/contracts/gen/go/finerr"
+	identity "github.com/fin-assist/go-identity"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/fin-assist/bank-bff/internal/apispec"
 	"github.com/fin-assist/bank-bff/internal/rest"
+	"github.com/fin-assist/bank-bff/internal/testpeer"
 )
 
 // fakeStream is a client stream that yields msgs then err (io.EOF when nil), or
@@ -61,27 +64,29 @@ func (s *fakeStream[T]) RecvMsg(any) error            { return nil }
 
 // fakes implements every client interface; a nil function fails the test.
 type fakes struct {
-	t             *testing.T
-	start         func(*userv1.StartPhoneVerificationRequest) (*userv1.StartPhoneVerificationResponse, error)
-	watchPhone    func(context.Context, *userv1.WatchPhoneVerificationRequest) (grpc.ServerStreamingClient[userv1.WatchPhoneVerificationResponse], error)
-	register      func(*userv1.RegisterRequest) (*userv1.RegisterResponse, error)
-	refresh       func(*userv1.RefreshTokensRequest) (*userv1.RefreshTokensResponse, error)
-	logout        func(*userv1.LogoutRequest) (*userv1.LogoutResponse, error)
-	document      func(*userv1.GetConsentDocumentRequest) (*userv1.GetConsentDocumentResponse, error)
-	profile       func() (*userv1.GetProfileResponse, error)
-	update        func(*userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error)
-	delete        func() (*userv1.DeleteAccountResponse, error)
-	grant         func(*userv1.GrantAssistantConsentRequest) (*userv1.GrantAssistantConsentResponse, error)
-	revoke        func() (*userv1.RevokeAssistantConsentResponse, error)
-	ask           func(*assistantv1.AskQuestionRequest) (*assistantv1.AskQuestionResponse, error)
-	watchAnswer   func(context.Context, *assistantv1.WatchAnswerRequest) (grpc.ServerStreamingClient[assistantv1.WatchAnswerResponse], error)
-	list          func(*assistantv1.ListMessagesRequest) (*assistantv1.ListMessagesResponse, error)
-	retry         func(*assistantv1.RetryAnswerRequest) (*assistantv1.RetryAnswerResponse, error)
-	limit         func() (*assistantv1.GetLimitResponse, error)
-	analyticsGet  func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error)
-	analyticsList func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error)
-	deadlines     []time.Duration
-	mu            sync.Mutex
+	t              *testing.T
+	start          func(*userv1.StartPhoneVerificationRequest) (*userv1.StartPhoneVerificationResponse, error)
+	watchPhone     func(context.Context, *userv1.WatchPhoneVerificationRequest) (grpc.ServerStreamingClient[userv1.WatchPhoneVerificationResponse], error)
+	register       func(*userv1.RegisterRequest) (*userv1.RegisterResponse, error)
+	refresh        func(*userv1.RefreshTokensRequest) (*userv1.RefreshTokensResponse, error)
+	logout         func(*userv1.LogoutRequest) (*userv1.LogoutResponse, error)
+	document       func(*userv1.GetConsentDocumentRequest) (*userv1.GetConsentDocumentResponse, error)
+	profile        func() (*userv1.GetProfileResponse, error)
+	update         func(*userv1.UpdateProfileRequest) (*userv1.UpdateProfileResponse, error)
+	delete         func() (*userv1.DeleteAccountResponse, error)
+	grant          func(*userv1.GrantAssistantConsentRequest) (*userv1.GrantAssistantConsentResponse, error)
+	revoke         func() (*userv1.RevokeAssistantConsentResponse, error)
+	ask            func(*assistantv1.AskQuestionRequest) (*assistantv1.AskQuestionResponse, error)
+	watchAnswer    func(context.Context, *assistantv1.WatchAnswerRequest) (grpc.ServerStreamingClient[assistantv1.WatchAnswerResponse], error)
+	list           func(*assistantv1.ListMessagesRequest) (*assistantv1.ListMessagesResponse, error)
+	retry          func(*assistantv1.RetryAnswerRequest) (*assistantv1.RetryAnswerResponse, error)
+	limit          func() (*assistantv1.GetLimitResponse, error)
+	analyticsGet   func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error)
+	analyticsApply func(*analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error)
+	analyticsPage  func(*analyticsv1.GetChartPageRequest) (*analyticsv1.GetChartPageResponse, error)
+	analyticsList  func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error)
+	deadlines      []time.Duration
+	mu             sync.Mutex
 }
 
 func must[F any](t *testing.T, f F, name string) F {
@@ -181,6 +186,15 @@ const (
 	testKey   = "0190c3a0-1b2c-7d3e-8f40-123456789abc"
 )
 
+type unitUserChecker struct{}
+
+func (unitUserChecker) VerifyUser(_ context.Context, token string) (string, error) {
+	if token != "good" {
+		return "", finerr.InvalidToken()
+	}
+	return testpeer.UserID, nil
+}
+
 func newUnitAPI(t *testing.T, streams rest.StreamLimits) *unitAPI {
 	t.Helper()
 	spec, err := apispec.Load(context.Background())
@@ -199,17 +213,13 @@ func newUnitAPI(t *testing.T, streams rest.StreamLimits) *unitAPI {
 	sf := &statementFakes{}
 	of := &operationFakes{f: f}
 	deps := Deps{Auth: f, Consents: f, Profile: f, Assistant: f, Statements: sf, Analytics: f, Operations: of, Categories: of, RegularPayments: of, Heartbeat: time.Millisecond, AnswerStream: time.Second, PhoneStream: time.Second}
+	auth, err := identity.NewHTTP(unitUserChecker{}, func(w http.ResponseWriter, _ *http.Request, _ error) { rest.InvalidToken().Write(w) })
+	if err != nil {
+		t.Fatal(err)
+	}
 	h, err := rest.Handler(rest.Config{Spec: spec, BodyLimit: rest.MinBodyLimit, Metrics: metrics, Log: slog.New(slog.DiscardHandler), Clock: time.Now,
 		Streams: rest.NewStreamLimiter(streams), Uploads: rest.NewStreamLimiter(rest.StreamLimits{Max: 16, PerIP: 2, RetryAfter: time.Second}), Gates: rest.Gates{MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}}, Clock: time.Now},
-		Authenticate: func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("Authorization") != goodToken {
-					rest.InvalidToken().Write(w)
-					return
-				}
-				next.ServeHTTP(w, r)
-			})
-		}}, deps.Routes())
+		Authenticate: auth.Middleware}, deps.Routes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,4 +300,13 @@ func (f *fakes) GetAnalytics(ctx context.Context, in *analyticsv1.GetAnalyticsRe
 func (f *fakes) ListPeriods(ctx context.Context, in *analyticsv1.ListPeriodsRequest, _ ...grpc.CallOption) (*analyticsv1.ListPeriodsResponse, error) {
 	f.deadline(ctx)
 	return must(f.t, f.analyticsList, "analyticsList")(in)
+}
+
+func (f *fakes) GetChartPage(ctx context.Context, in *analyticsv1.GetChartPageRequest, _ ...grpc.CallOption) (*analyticsv1.GetChartPageResponse, error) {
+	f.deadline(ctx)
+	return must(f.t, f.analyticsPage, "analyticsPage")(in)
+}
+func (f *fakes) ApplyRegularPaymentDismissal(ctx context.Context, in *analyticsv1.ApplyRegularPaymentDismissalRequest, _ ...grpc.CallOption) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+	f.deadline(ctx)
+	return must(f.t, f.analyticsApply, "analyticsApply")(in)
 }

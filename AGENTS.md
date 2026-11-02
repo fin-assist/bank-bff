@@ -5,7 +5,7 @@
 FIN-268 (FIN-331) serves 14 public REST/SSE operations of auth, consents, profile reads/assistant
 consent and the assistant; FIN-342 adds six import operations, FIN-361 adds PATCH/DELETE profile
 and FIN-360 adds analytics/period reads. FIN-359 completes operations, categories and regular-payment dismissals
-(30 operations total, docs/server.md). Unknown paths/methods answer 404.
+(31 operations after FIN-416, docs/server.md). Unknown paths/methods answer 404.
 Do not invent REST fields, RPCs or error codes.
 Contracts live in `fin-assist/contracts`: docs/api.md, openapi/openapi.yaml, docs/grpc-api.md.
 The owner's latest decision and contracts take precedence over copied template assumptions.
@@ -17,7 +17,7 @@ The owner's latest decision and contracts take precedence over copied template a
   api.go builds the public API (embedded contract, go-identity Assembly, go-grpc peers) before bind.
 - internal/rest: request ID, gates (MAINTENANCE, X-Client-Version), auth, body limit and kin-openapi
   validation, finerr.ToREST translation and whole-request retry safety, SSE pump/limits, metrics and access log.
-- internal/endpoint: the 30 operations, REST <-> gRPC conversion; internal/catalog: user_message and
+- internal/endpoint: the 31 operations, REST <-> gRPC conversion; internal/catalog: user_message and
   severity texts (FIN-225); internal/apispec: embedded openapi.yaml copy with its contracts commit.
 - internal/testpeer: test infrastructure only — bufconn fakes of user/assistant/statements/analytics, keys, contract checks.
 - internal/config: all environment settings in Vars; docs/config.md table is checked by tests.
@@ -39,7 +39,7 @@ ENV=dev builds no public API (NewAssembly refuses dev): no auth bypass. Pre-stre
 JSON; streams extend their own connection deadlines and have their own deadline and caps.
 Add an infrastructure dependency only for a real endpoint/usecase; no dummy code for coverage.
 
-Current tagged contracts/gen/go is v0.9.0 (FIN-413, merged d827664). FIN-400 supports all_time; nested tile groups and chart actions remain opaque Struct data. Typed BlockAction period/period_key project optional period/date. Assistant chips stay calendar-only. FIN-342 REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
+Current tagged contracts/gen/go is v0.11.0 (FIN-418/FIN-420, merged 60fa09c). FIN-400 supports all_time; nested tile groups and chart actions remain opaque Struct data. Typed BlockAction period/period_key project optional period/date. Assistant chips stay calendar-only. FIN-342 REST retryable is service RequestRetryInfo (or explicit local transport permission) AND
 the declared safety of the entire REST operation; an unknown keyed POST replay window stays false.
 Do not infer permission from an error code, HTTP status, RetryInfo, text or UUID. Nested result Status
 is decoded only by finerr.DecodeResultStatus: valid canonical reason wins, present-invalid never reads
@@ -121,7 +121,7 @@ Security: authorization boundaries, private operational listener, no data leakag
 shutdown, startup failure cleanup, trusted metadata, safe CI and fork permissions.
 Tests: meaningful behavior coverage at all three levels; real HTTP API and transport dependencies;
 negative startup/shutdown scenarios; unchanged strict guards and independent total80.
-All 30 FIN-268/FIN-342/FIN-361/FIN-360/FIN-359 contract operations exist; do
+All 31 FIN-268/FIN-342/FIN-361/FIN-360/FIN-359/FIN-416 contract operations exist; do
 not treat passing tests as implementing unimplemented contract operations. Each served operation needs
 API tests for success, its declared errors, token, Idempotency-Key, schema, client version and SSE.
 
@@ -169,3 +169,11 @@ Shared lint and script tests require Python 3.11+ with PyYAML.
 If a pinned revision changes common/bootstrap.py, synchronize its exact scripts/common_ci.py copy in the same PR; Renovate updates SHA references only. Rollback restores both pins and the matching bootstrap bytes. Byte equality keeps an incomplete update red; a manual copy update is not a bot-only FIN-211 update.
 
 FIN-411: REST analytics/periods accept rolling_year and rolling_quarter, pass the exact request and both transfer modes to analytics, and preserve opaque financial blocks/edge ranges unchanged. New singleton producer keys are validated against their type; navigation is absent. Assistant chips remain calendar-only. Canonical contract is d827664 / gen/go v0.9.0; rollout analytics → producer → BFF/Android, no deployment in this PR.
+
+## FIN-416 analytics updates
+
+After BSD has committed, Apply failures are translated with Call.FailAs: only authentication401 remains a client refusal; all other failures are500 with valid service retry permission preserved. Code-specific waiting fields are not copied to INTERNAL_ERROR. Malformed source or composer envelopes are500/retryable=false. Updated insight_card/tile_group and ready/tentative/default-ready blocks require data, which remains opaque.
+
+Canonical contract: FIN-418/FIN-420, gen/go v0.11.0 / merged60fa09c. PUT dismissal requires a single date=YYYY-MM and transfer_mode before any effect; pass params to BSD once, verify its positive target, projection params and user_id against identity.UserID(ctx), and enforce 3 MiB before forwarding the unchanged MetricProjection to ApplyRegularPaymentDismissal. Analytics composes only that source result; it does not read a regular snapshot or BSD. Unknown protobuf fields are preserved. Return200 with complete blocks and required_calc_version; never a receipt-only success or local financial arithmetic. Each child call has its own bounded deadline and is never implicitly replayed. Service retry permission is combined with the proven construction-idempotence of both assignments. A new unavailable month is BSD400 date/OUT_OF_RANGE without a write; only an already saved assignment with unavailable context is BSD canonical422 ANALYTICS_CONTEXT_UNAVAILABLE with truthful saved-change text and retryable=false; restore remains204.
+
+GET analytics forwards required calculation including has_data=false. Preserve actual source time_zone in analytics, period lists, block updates, chart pages, import config/complete and operation lists; missing required/invalid zones fail closed. No profile lookup/default substitution. Historical offsets containing seconds are rendered inUTC (same instant), with source IANA preserved. Blocks/help_text and nested tile data remain opaque. GET /v1/analytics/charts/monthly_chart forwards one bounded opaque cursor and service errors without recalculation or inspecting financial points. Import config forwards optional inclusive period_from/period_to strings; BSD owns pairing, order, today and IANA boundaries. Empty/repeated scalars retain exact FIN-418 violation codes. Rollout: analytics, then BSD/BFF, then Android/mock; deployment is separate.

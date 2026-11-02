@@ -102,13 +102,13 @@ func TestUnitRollingMalformedProducerAndEmpty(t *testing.T) {
 		}
 	}
 	u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
-		return &analyticsv1.GetAnalyticsResponse{}, nil
+		return &analyticsv1.GetAnalyticsResponse{Calculation: &commonv1.CalculationState{}}, nil
 	}
-	if r := u.serve(t, "GET", "/v1/analytics?period=rolling_year", "", nil); r.Code != http.StatusOK || len(r.json) != 1 || r.json["has_data"] != false {
+	if r := u.serve(t, "GET", "/v1/analytics?period=rolling_year", "", nil); r.Code != http.StatusOK || len(r.json) != 2 || r.json["has_data"] != false {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	u.f.analyticsList = func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
-		return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "2026", Range: rollingFixture(5).Period.Range}}}, nil
+		return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: "2026", Range: rollingFixture(5).Period.Range}}}, nil
 	}
 	if r := u.serve(t, "GET", "/v1/analytics/periods?period=rolling_year", "", nil); r.Code != 500 {
 		t.Fatal(r.Code, r.Body.String())

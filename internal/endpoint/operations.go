@@ -9,6 +9,7 @@ import (
 
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
 	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
+	identity "github.com/fin-assist/go-identity"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -262,14 +263,27 @@ func (d Deps) listCategories(c *rest.Call) {
 }
 
 func (d Deps) dismissRegularPayment(c *rest.Call) {
+	params, ok := dismissalParams(c)
+	if !ok {
+		return
+	}
+	userID, authenticated := identity.UserID(c.R.Context())
+	if !authenticated {
+		c.Refuse(rest.Internal(), false)
+		return
+	}
 	ctx, cancel := unary(c)
 	defer cancel()
-	_, err := d.RegularPayments.DismissRegularPayment(ctx, &statementdatav1.DismissRegularPaymentRequest{RegularPaymentId: c.R.PathValue("id")})
+	in, err := d.RegularPayments.DismissRegularPayment(ctx, &statementdatav1.DismissRegularPaymentRequest{RegularPaymentId: c.R.PathValue("id"), Params: params})
 	if err != nil {
 		c.Fail(err)
 		return
 	}
-	c.W.WriteHeader(http.StatusNoContent)
+	if in.GetCalcVersion() <= 0 || !validDismissalProjection(in.GetProjection(), params, userID) {
+		c.Refuse(rest.Internal(), false)
+		return
+	}
+	d.applyDismissal(c, params, in.GetCalcVersion(), in.GetProjection())
 }
 
 func (d Deps) restoreRegularPayment(c *rest.Call) {

@@ -29,7 +29,7 @@ func analyticsMessage(t *testing.T) *analyticsv1.GetAnalyticsResponse {
 	t.Helper()
 	from := timestamppb.New(time.Date(2026, 9, 1, 0, 0, 0, 987654321, time.UTC))
 	to := timestamppb.New(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
-	out := &analyticsv1.GetAnalyticsResponse{HasData: true, TimeZone: "Asia/Vladivostok", Currency: "RUB",
+	out := &analyticsv1.GetAnalyticsResponse{Calculation: &commonv1.CalculationState{CalcVersion: 7, Recalculating: true}, HasData: true, TimeZone: "Asia/Vladivostok", Currency: "RUB",
 		Params:     &commonv1.AnalyticsParams{Period: commonv1.PeriodType_PERIOD_TYPE_MONTH, PeriodKey: "2026-09", TransferMode: commonv1.TransferMode_TRANSFER_MODE_WITH},
 		Period:     &analyticsv1.PeriodInfo{Range: &commonv1.TimeRange{Start: from, End: to}, IsCurrent: true, Bounds: &commonv1.DataBounds{Coverage: commonv1.Coverage_COVERAGE_PARTIAL, DataFrom: from, DataTo: to, Gaps: []*commonv1.TimeRange{{Start: from, End: to}}}},
 		Navigation: &analyticsv1.Navigation{Previous: proto.String("2026-08")}, State: &analyticsv1.ScreenState{Stale: true, LastOperationAt: from, DataFrom: from, DataTo: to, CalculatedAt: to, FullMonths: 2, UnreadLinesCount: 3, Recalculating: true}}
@@ -132,11 +132,11 @@ func scenarioAnalytics(t *testing.T, start starter) {
 	}
 	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
 		a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
-			return &analyticsv1.GetAnalyticsResponse{Currency: "ignored", Blocks: fixture.Blocks}, nil
+			return &analyticsv1.GetAnalyticsResponse{Calculation: &commonv1.CalculationState{}, Currency: "ignored", Blocks: fixture.Blocks}, nil
 		}
 	})
 	r := b.do(t, request{method: "GET", path: "/v1/analytics", route: "/v1/analytics", header: auth})
-	if r.StatusCode != 200 || !reflect.DeepEqual(r.json, map[string]any{"has_data": false}) {
+	if r.StatusCode != 200 || !reflect.DeepEqual(r.json, map[string]any{"has_data": false, "calculation": map[string]any{"calc_version": 0.0, "recalculating": false}}) {
 		t.Fatal(string(r.body))
 	}
 	before := len(b.peers.Calls(analyticsv1.AnalyticsService_GetAnalytics_FullMethodName))
@@ -367,7 +367,7 @@ func scenarioAnalyticsMalformed(t *testing.T, start starter) {
 		before := b.analyticsCounter(t, "finassist_untranslated_code_total", tc.field, tc.code)
 		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
 			a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
-				return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{in}}, nil
+				return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{in}}, nil
 			}
 		})
 		r := b.do(t, request{method: "GET", path: "/v1/analytics/periods", route: "/v1/analytics/periods", header: auth})
@@ -405,7 +405,7 @@ func scenarioAnalyticsMalformed(t *testing.T, start starter) {
 			return in, nil
 		}
 		a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
-			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "2026-09", Range: in.Period.Range, Coverage: commonv1.Coverage(99)}}}, nil
+			return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: "2026-09", Range: in.Period.Range, Coverage: commonv1.Coverage(99)}}}, nil
 		}
 	})
 	for _, p := range []struct{ path, field string }{{"/v1/analytics", "GetAnalyticsResponse.period.bounds.coverage"}, {"/v1/analytics/periods", "ListPeriodsResponse.periods.coverage"}} {
@@ -460,7 +460,7 @@ func scenarioAnalyticsEnvelope(t *testing.T, start starter) {
 					return in, nil
 				}
 				a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
-					return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: key, Range: in.Period.Range}}}, nil
+					return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: key, Range: in.Period.Range}}}, nil
 				}
 			})
 			code := "invalid"

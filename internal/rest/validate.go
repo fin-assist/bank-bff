@@ -6,8 +6,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -92,6 +94,9 @@ var validationOptions = &openapi3filter.Options{
 // It returns every violation found. Lengths are counted in Unicode code points, as
 // docs/api.md defines «символов» (kin-openapi counts UTF-16 units).
 func Validate(ctx context.Context, r *http.Request, op apispec.Operation, path map[string]string, body []byte) []Detail {
+	if details := exactCalendarQuery(r, op); len(details) > 0 {
+		return details
+	}
 	clone := r.Clone(ctx)
 	clone.Body = io.NopCloser(bytes.NewReader(body))
 	clone.ContentLength = int64(len(body))
@@ -229,4 +234,56 @@ func StreamingInput(r *http.Request, op apispec.Operation, path map[string]strin
 	var details []Detail
 	collect(err, &details)
 	return nil, dedupe(details), nil
+}
+
+// exactCalendarQuery applies FIN-418's query-specific error codes before generic
+// schema validation can select a duplicate value or classify length as a range.
+func exactCalendarQuery(r *http.Request, op apispec.Operation) []Detail {
+	var fields []string
+	switch op.Route.Operation.OperationID {
+	case "getImportConfig":
+		fields = []string{"period_from", "period_to"}
+	case "dismissRegularPayment":
+		fields = []string{"date", "transfer_mode"}
+	case "getAnalyticsChartPage":
+		fields = []string{"cursor"}
+	default:
+		return nil
+	}
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return []Detail{{Code: DetailInvalidFormat, Message: detailMessage(DetailInvalidFormat)}}
+	}
+	var out []Detail
+	if op.Route.Operation.OperationID == "getAnalyticsChartPage" {
+		for field := range q {
+			if field != "cursor" {
+				out = append(out, Detail{Field: field, Code: DetailInvalidFormat, Message: detailMessage(DetailInvalidFormat)})
+			}
+		}
+	}
+	for _, field := range fields {
+		values, exists := q[field]
+		if !exists {
+			continue
+		}
+		invalid := len(values) != 1 || values[0] == ""
+		code := DetailInvalidFormat
+		if field == "cursor" && len(values) == 1 && values[0] == "" {
+			code = DetailRequired
+		}
+		if !invalid {
+			switch field {
+			case "cursor":
+				invalid = !utf8.ValidString(values[0]) || utf8.RuneCountInString(values[0]) > 2048
+			case "period_from", "period_to":
+				day, parseErr := time.Parse("2006-01-02", values[0])
+				invalid = parseErr != nil || day.Year() < 1 || day.Format("2006-01-02") != values[0]
+			}
+		}
+		if invalid {
+			out = append(out, Detail{Field: field, Code: code, Message: detailMessage(code)})
+		}
+	}
+	return dedupe(out)
 }

@@ -59,7 +59,21 @@ type Call struct {
 // Fail translates an internal call error and permits original-request replay only
 // when service permission and the validated whole-operation safety declaration agree.
 func (c *Call) Fail(err error) {
+	c.FailAs(err, c.Op.Statuses)
+}
+
+// FailAs narrows the statuses valid for the current phase of a multi-call operation.
+// A translated refusal outside that set becomes INTERNAL_ERROR without claiming
+// that an earlier effect was rejected. Only explicit retry permission survives;
+// code-specific waiting fields do not belong to INTERNAL_ERROR.
+func (c *Call) FailAs(err error, allowed map[int]bool) {
 	e := c.Metrics.FromGRPC(err, c.Op.Statuses)
+	if !allowed[e.Status] {
+		c.Metrics.unmappedError(e.Code, codeOf(err))
+		retry := e.serviceRequestRetryable
+		e = Internal()
+		e.serviceRequestRetryable = retry
+	}
 	if e.Code == "INTERNAL_ERROR" {
 		c.Log.WarnContext(c.R.Context(), "internal call failed", "grpc_code", codeOf(err))
 	}
