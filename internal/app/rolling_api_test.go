@@ -128,13 +128,13 @@ func TestAPIRollingErrorsAndEmptyResponses(t *testing.T) {
 	}
 	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
 		a.GetFunc = func(context.Context, *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
-			return &analyticsv1.GetAnalyticsResponse{}, nil
+			return &analyticsv1.GetAnalyticsResponse{Calculation: &commonv1.CalculationState{}}, nil
 		}
 		a.ListFunc = func(context.Context, *analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
 			return &analyticsv1.ListPeriodsResponse{}, nil
 		}
 	})
-	if r := b.do(t, request{method: "GET", path: "/v1/analytics?period=rolling_year", route: "/v1/analytics", header: auth}); r.StatusCode != 200 || len(r.json) != 1 || r.json["has_data"] != false {
+	if r := b.do(t, request{method: "GET", path: "/v1/analytics?period=rolling_year", route: "/v1/analytics", header: auth}); r.StatusCode != 200 || len(r.json) != 2 || r.json["has_data"] != false {
 		t.Fatal(r.StatusCode, string(r.body))
 	}
 	if r := b.do(t, request{method: "GET", path: "/v1/analytics/periods?period=rolling_year", route: "/v1/analytics/periods", header: auth}); r.StatusCode != 200 || len(r.json["periods"].([]any)) != 0 {

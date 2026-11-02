@@ -22,7 +22,7 @@ import (
 func analyticsFixture() *analyticsv1.GetAnalyticsResponse {
 	from := timestamppb.New(time.Date(2026, 9, 1, 0, 0, 0, 123456789, time.UTC))
 	to := timestamppb.New(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
-	return &analyticsv1.GetAnalyticsResponse{HasData: true, Currency: "RUB", TimeZone: "Asia/Vladivostok",
+	return &analyticsv1.GetAnalyticsResponse{Calculation: &commonv1.CalculationState{CalcVersion: 7, Recalculating: true}, HasData: true, Currency: "RUB", TimeZone: "Asia/Vladivostok",
 		Params:     &commonv1.AnalyticsParams{Period: commonv1.PeriodType_PERIOD_TYPE_QUARTER, PeriodKey: "2026-Q3", TransferMode: commonv1.TransferMode_TRANSFER_MODE_WITHOUT},
 		Period:     &analyticsv1.PeriodInfo{Range: &commonv1.TimeRange{Start: from, End: to}, IsCurrent: true, Bounds: &commonv1.DataBounds{Coverage: commonv1.Coverage_COVERAGE_PARTIAL, DataFrom: from, DataTo: to, Gaps: []*commonv1.TimeRange{{Start: from, End: to}}}},
 		Navigation: &analyticsv1.Navigation{Previous: proto.String("2026-Q2")},
@@ -36,7 +36,7 @@ func TestUnitAnalyticsInputsAndEmptyResponse(t *testing.T) {
 	var got *analyticsv1.GetAnalyticsRequest
 	u.f.analyticsGet = func(in *analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) {
 		got = in
-		return &analyticsv1.GetAnalyticsResponse{Currency: "unexpected", Blocks: []*commonv1.Block{{Type: "ignored"}}}, nil
+		return &analyticsv1.GetAnalyticsResponse{Calculation: &commonv1.CalculationState{}, Currency: "unexpected", Blocks: []*commonv1.Block{{Type: "ignored"}}}, nil
 	}
 	for _, tc := range []struct {
 		q      string
@@ -49,7 +49,7 @@ func TestUnitAnalyticsInputsAndEmptyResponse(t *testing.T) {
 		{"?period=year&date=2026", commonv1.PeriodType_PERIOD_TYPE_YEAR, commonv1.TransferMode_TRANSFER_MODE_WITH, proto.String("2026")},
 	} {
 		r := u.serve(t, http.MethodGet, "/v1/analytics"+tc.q, "", nil)
-		if r.Code != 200 || !reflect.DeepEqual(r.json, map[string]any{"has_data": false}) || got.GetPeriod() != tc.period || got.GetTransferMode() != tc.mode || !reflect.DeepEqual(got.PeriodKey, tc.key) || got.UserId != nil {
+		if r.Code != 200 || !reflect.DeepEqual(r.json, map[string]any{"has_data": false, "calculation": map[string]any{"calc_version": 0.0, "recalculating": false}}) || got.GetPeriod() != tc.period || got.GetTransferMode() != tc.mode || !reflect.DeepEqual(got.PeriodKey, tc.key) || got.UserId != nil {
 			t.Fatal(r.Code, r.Body.String(), got)
 		}
 		if tc.period == commonv1.PeriodType_PERIOD_TYPE_QUARTER && (len(got.Supports) != 2 || got.Supports[1].GetType() != "future" || got.Supports[1].GetMaxVersion() != 3 || got.Experiments["future"] != "x") {
@@ -219,7 +219,7 @@ func TestUnitAnalyticsIncompleteServiceResponsesFailClosed(t *testing.T) {
 		in := &analyticsv1.PeriodItem{Key: "2026-09", Range: analyticsFixture().Period.Range}
 		tc.mutate(in)
 		u.f.analyticsList = func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
-			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{in}}, nil
+			return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{in}}, nil
 		}
 		r := u.serve(t, "GET", "/v1/analytics/periods", "", nil)
 		if r.Code != 500 || r.code() != "INTERNAL_ERROR" || unitAnalyticsCounter(t, u, tc.field, tc.code) != 1 {
@@ -304,7 +304,7 @@ func TestUnitAnalyticsCalendarKeys(t *testing.T) {
 		in.Navigation = &analyticsv1.Navigation{Previous: proto.String(key), Next: proto.String(key)}
 		u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return in, nil }
 		u.f.analyticsList = func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
-			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: key, Range: in.Period.Range}}}, nil
+			return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: key, Range: in.Period.Range}}}, nil
 		}
 		for _, path := range []string{"/v1/analytics", "/v1/analytics/periods"} {
 			if r := u.serve(t, "GET", path+"?period="+period, "", nil); r.Code != 200 {
@@ -331,7 +331,7 @@ func TestUnitAnalyticsCalendarKeys(t *testing.T) {
 			}
 			u.f.analyticsGet = func(*analyticsv1.GetAnalyticsRequest) (*analyticsv1.GetAnalyticsResponse, error) { return in, nil }
 			u.f.analyticsList = func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
-				return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: key, Range: in.Period.Range}}}, nil
+				return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: key, Range: in.Period.Range}}}, nil
 			}
 			path := "/v1/analytics"
 			if target == "periods" {

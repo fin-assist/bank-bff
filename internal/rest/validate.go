@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -92,6 +93,9 @@ var validationOptions = &openapi3filter.Options{
 // It returns every violation found. Lengths are counted in Unicode code points, as
 // docs/api.md defines «символов» (kin-openapi counts UTF-16 units).
 func Validate(ctx context.Context, r *http.Request, op apispec.Operation, path map[string]string, body []byte) []Detail {
+	if details := exactCalendarQuery(r, op); len(details) > 0 {
+		return details
+	}
 	clone := r.Clone(ctx)
 	clone.Body = io.NopCloser(bytes.NewReader(body))
 	clone.ContentLength = int64(len(body))
@@ -229,4 +233,40 @@ func StreamingInput(r *http.Request, op apispec.Operation, path map[string]strin
 	var details []Detail
 	collect(err, &details)
 	return nil, dedupe(details), nil
+}
+
+// exactCalendarQuery preserves FIN-418's distinction between a missing field and
+// an explicitly empty or repeated scalar, before OpenAPI chooses the first value.
+func exactCalendarQuery(r *http.Request, op apispec.Operation) []Detail {
+	var fields []string
+	switch op.Route.Operation.OperationID {
+	case "getImportConfig":
+		fields = []string{"period_from", "period_to"}
+	case "dismissRegularPayment":
+		fields = []string{"date", "transfer_mode"}
+	case "getAnalyticsChartPage":
+		fields = []string{"cursor"}
+	default:
+		return nil
+	}
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return []Detail{{Code: DetailInvalidFormat, Message: detailMessage(DetailInvalidFormat)}}
+	}
+	var out []Detail
+	for _, field := range fields {
+		values, exists := q[field]
+		if !exists {
+			continue
+		}
+		invalid := len(values) != 1 || values[0] == ""
+		code := DetailInvalidFormat
+		if field == "cursor" && len(values) == 1 && values[0] == "" {
+			code = DetailRequired
+		}
+		if invalid {
+			out = append(out, Detail{Field: field, Code: code, Message: detailMessage(code)})
+		}
+	}
+	return out
 }

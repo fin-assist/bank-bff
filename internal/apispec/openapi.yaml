@@ -742,10 +742,31 @@ paths:
       - statements
       operationId: getImportConfig
       summary: Конфигурация импорта
-      description: Для экрана «Загрузка выписки».
+      description: |
+        Для экрана «Загрузка выписки». Без дат — рекомендуемый период; period_from и period_to
+        задают оба включительных календарных дня в поясе профиля. Идентичность — из токена.
+        Сервер формирует ссылку, не обращаясь к банку. Детальная валидация и rollout — api.md3.1.
       parameters:
       - $ref: '#/components/parameters/XRequestId'
       - $ref: '#/components/parameters/XClientVersion'
+      - name: period_from
+        in: query
+        description: Начальный день включительно; только вместе с period_to. Профильный часовой пояс.
+        schema:
+          type: string
+          format: date
+          minLength: 10
+          maxLength: 10
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+      - name: period_to
+        in: query
+        description: Конечный день включительно; не раньше period_from и не позже сегодня в поясе профиля.
+        schema:
+          type: string
+          format: date
+          minLength: 10
+          maxLength: 10
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
       responses:
         '200':
           description: Конфигурация
@@ -754,6 +775,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImportConfig'
               example:
+                time_zone: Europe/Moscow
                 download_url: https://www.tbank-online.com/...
                 login_url: https://www.tbank.ru/login/
                 max_file_size_bytes: 10485760
@@ -1128,6 +1150,7 @@ paths:
                 feed:
                   summary: Лента
                   value:
+                    time_zone: Europe/Moscow
                     items:
                     - id: 01a10812-a0e8-765b-89e4-a4314a43656f
                       kind: expense
@@ -1182,6 +1205,7 @@ paths:
                 search:
                   summary: Поиск (сокращено до одной записи)
                   value:
+                    time_zone: Europe/Moscow
                     items:
                     - id: 01a10812-a0f1-7b3c-9e2d-4a6f8c1e3b57
                       kind: expense
@@ -1399,7 +1423,7 @@ paths:
       summary: Аналитика за период
       description: |
         Экран — упорядоченный список блоков общего каталога (FIN-4). Пороги, блокировки, базы расчёта, устаревание и
-        тексты сервер вычисляет сам; клиент только рисует блоки. При `has_data: false` остальных полей нет.
+        тексты сервер вычисляет сам; клиент только рисует блоки. При has_data=false остаётся calculation; финансовых полей нет.
       parameters:
       - name: period
         in: query
@@ -1470,6 +1494,8 @@ paths:
               example:
                 {
                   "has_data": true,
+                  "time_zone": "Europe/Moscow",
+                  "calculation": {"calc_version": 3, "recalculating": false},
                   "params": {
                     "period": "month",
                     "date": "2026-09",
@@ -1504,14 +1530,14 @@ paths:
                             "title": "Доходы минус расходы",
                             "value": 7258000,
                             "value_kind": "amount",
-                            "caption": "46% дохода · по выписке"
+                            "caption": "46% дохода"
                           },
                           {
                             "id": "expense",
                             "title": "Расходы",
                             "value": 8432000,
                             "value_kind": "amount",
-                            "caption": "по выписке за 1–25 сентября",
+                            "caption": "1–25 сентября",
                             "action": {
                               "type": "open_operations",
                               "filter": {
@@ -1527,7 +1553,7 @@ paths:
                             "title": "Расходы в день",
                             "value": 337280,
                             "value_kind": "amount",
-                            "caption": "в среднем за 1–25 сентября"
+                            "caption": "в среднем за 1–25 сентября", "help_text": "Расходы делим на покрытые дни не позже сегодня; пропуски не учитываются"
                           },
                           {
                             "id": "income",
@@ -1654,6 +1680,43 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /v1/analytics/charts/monthly_chart:
+    get:
+      tags:
+      - analytics
+      operationId: getAnalyticsChartPage
+      summary: Следующая или предыдущая страница месячного графика
+      description: |
+        Максимум 60 календарных месяцев. Cursor проверяется для пользователя из токена и исходных режима,
+        пояса и ревизии. Ответ не меняет выбранный период, его notes или выделение. Правила — api.md6.4.
+      parameters:
+      - name: cursor
+        in: query
+        required: true
+        description: Непрозрачный previous или next из page; клиент не разбирает и не изменяет.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 2048
+      - $ref: '#/components/parameters/XRequestId'
+      - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: Страница согласованной истории
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsChartPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /v1/analytics/periods:
     get:
       tags:
@@ -1688,6 +1751,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AnalyticsPeriodsList'
               example:
+                time_zone: Europe/Moscow
                 periods:
                 - key: '2026-09'
                   range:
@@ -1726,21 +1790,44 @@ paths:
       operationId: dismissRegularPayment
       summary: «Не подписка»
       description: |
-        Платёж исчезает из карточки, итог пересчитывается. Отметка привязана к ключу платежа — описанию
-        операции из выписки (точное совпадение), а не к периоду. Пока итог не пересчитан, `getAnalytics` отдаёт `state.recalculating: true`.
-        Идемпотентно.
+        Возвращает все данные изменившихся блоков сразу, включая итог, список и items_more (api.md6.3).
+        Отметка действует во всей истории; query задаёт показанный месяц для ответа. До записи проверяются параметры.
+        BFF после BSD вызывает analytics для проекции из собственной БД; полного фонового расчёта не ждёт.
+        Временный сбой после сохранения отметки —500 INTERNAL_ERROR с разрешением безопасного повтора.
+        Достоверно отсутствующий/удалённый месяц после сохранённого assignment —422 ANALYTICS_CONTEXT_UNAVAILABLE,
+        retryable=false. user_message сообщает, что изменение сохранено; клиент удерживает известный результат
+        и один раз обновляет контекст GET вместо повтора прежнего PUT. Синтаксическая400 предшествует BSD/записи.
+        Успех без blocks не возвращается. 503 остаётся только общим режимом MAINTENANCE.
       parameters:
+      - name: date
+        in: query
+        required: true
+        description: Точный показанный календарный месяц; period фиксирован month.
+        schema:
+          type: string
+          pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+      - name: transfer_mode
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/TransferMode'
       - $ref: '#/components/parameters/XRequestId'
       - $ref: '#/components/parameters/XClientVersion'
       responses:
-        '204':
-          description: Отмечено
+        '200':
+          description: Полные обновлённые блоки выбранного месяца
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsBlockUpdate'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
@@ -1758,7 +1845,7 @@ paths:
       - $ref: '#/components/parameters/XClientVersion'
       responses:
         '204':
-          description: Отметка снята
+          description: Отметка снята; аналитика обновится асинхронно
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -2310,7 +2397,8 @@ components:
     Unprocessable:
       description: |
         Запрос понят, но выполнить нельзя: `WRONG_FORMAT`, `CSV_NOT_ACCEPTED`, `WRONG_BANK`, `CONSENT_OUTDATED`,
-        `TOO_MANY_RESULTS`, `SELECTION_NOT_FOUND`, `CATEGORY_NOT_ASSIGNABLE`, `RETRY_NOT_ALLOWED`.
+        `TOO_MANY_RESULTS`, `SELECTION_NOT_FOUND`, `CATEGORY_NOT_ASSIGNABLE`, `RETRY_NOT_ALLOWED`, `ANALYTICS_CONTEXT_UNAVAILABLE`.
+        Последний код: assignment сохранён, но ответ выбранного периода недоступен; user_message/recovery — api.md6.3.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/XRequestId'
@@ -2583,6 +2671,7 @@ components:
           - SELECTION_NOT_FOUND
           - CATEGORY_NOT_ASSIGNABLE
           - RETRY_NOT_ALLOWED
+          - ANALYTICS_CONTEXT_UNAVAILABLE
           - RATE_LIMITED
           - INTERNAL_ERROR
           - MAINTENANCE
@@ -2976,16 +3065,19 @@ components:
     ImportConfig:
       type: object
       required:
+      - time_zone
       - download_url
       - login_url
       - max_file_size_bytes
       - accepted_formats
       - suggested_period
       properties:
+        time_zone:
+          $ref: '#/components/schemas/SourceTimeZone'
         download_url:
           type: string
           format: uri
-          description: Ссылка выгрузки OFX за `suggested_period` («Скачать за год»), открывается в браузере.
+          description: Ссылка выгрузки OFX за точный `suggested_period`, открывается в браузере; название действия зависит от выбранного режима и наличия операций.
         login_url:
           type: string
           format: uri
@@ -3002,8 +3094,10 @@ components:
         suggested_period:
           allOf:
           - $ref: '#/components/schemas/Range'
-          description: 12 месяцев назад для первой загрузки, от начала дня последней загруженной операции — для повторной;
-            `to` — начало завтрашнего дня.
+          description: |
+            С датами — от начала period_from до начала дня после period_to в поясе профиля.
+            Без дат — 12 месяцев назад для первой загрузки или от начала дня последней операции для повторной;
+            to — начало завтрашнего дня. Клиент проверяет совпадение с выбранными днями до открытия ссылки.
         loaded:
           nullable: true
           allOf:
@@ -3059,6 +3153,7 @@ components:
       type: object
       description: Терминальное событие `complete` — всё для экрана итога импорта.
       required:
+      - time_zone
       - operation_count
       - new_count
       - duplicate_count
@@ -3072,6 +3167,8 @@ components:
       - notices
       - currency
       properties:
+        time_zone:
+          $ref: '#/components/schemas/SourceTimeZone'
         operation_count:
           type: integer
           description: Операций прочитано из файла.
@@ -3237,7 +3334,7 @@ components:
         data_to:
           type: string
           format: date-time
-          description: Время последней операции, если она в последний покрытый день месяца, иначе 23:59:59 этого дня.
+          description: Время последней операции, если она в последний покрытый день месяца, иначе последняя существующая секунда этого дня (при fold — поздний instant).
         gaps:
           type: array
           description: Дни без данных ни в одном файле. Пропуск, пересекающий месяц, приходит целиком (docs/calc.md, раздел 4).
@@ -3603,10 +3700,12 @@ components:
       type: object
       description: |
         Лента: `items`, `summary`, `state`, `range`, `next_before`. Поиск: `items`, `total_count`, `range`,
-        `has_older_data`. Группировку по дням и месяцам клиент делает сам по `occurred_at` в поясе профиля.
+        `has_older_data`. Группировку по дням и месяцам клиент делает по occurred_at в time_zone ответа. Пояс обязателен при непустых items/summary или фактических range/state-датах; пустой ответ без дат может его не содержать.
       required:
       - items
       properties:
+        time_zone:
+          $ref: '#/components/schemas/SourceTimeZone'
         items:
           type: array
           items:
@@ -3661,7 +3760,7 @@ components:
           format: date-time
           nullable: true
           description: Есть, если месяц неполный — конец данных по покрытым дням (docs/api.md, «Формат») — время последней
-            операции, если она в последний покрытый день, иначе 23:59:59 этого дня. День берётся как есть («по 25
+            операции, если она в последний покрытый день, иначе последняя существующая секунда этого дня (при fold — поздний instant). Гражданский день берётся после перевода момента в IANA-пояс time_zone ответа, без вычитания суток («по 25
             сентября»); не граница дня, в отличие от `FeedState.data_to`.
     FeedState:
       type: object
@@ -3772,12 +3871,66 @@ components:
           type: string
           nullable: true
           description: Подпись в выборе («не в тратах»); есть только у системных.
+    SourceTimeZone:
+      type: string
+      minLength: 1
+      maxLength: 128
+      description: >-
+        Фактический IANA-пояс данных этого ответа, из того же снимка. Для календарной подписи datetime переводится в него.
+        Не подменяется кэшем профиля. Валидная у сервера зона, неизвестная tzdb устройства, останавливает автоматические
+        повторы: всегда явная локальная несовместимость, включая показ проверенного cache с пометкой неактуальности
+        и прежними timestamp/source-zone. Следующий проверенный ответ с разрешимой зоной снимает это состояние;
+        явный повтор/новое открытие/изменение контекста допускают запрос, без автоматического цикла отказа.
+    AnalyticsBlockUpdate:
+      type: object
+      required: [params, currency, time_zone, blocks, required_calc_version]
+      description: Полные изменившиеся блоки; не заменяет state/calculated_at или готовность остальных блоков. Правила api.md6.3.
+      properties:
+        params:
+          $ref: '#/components/schemas/AnalyticsParams'
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        time_zone:
+          $ref: '#/components/schemas/SourceTimeZone'
+        blocks:
+          type: array
+          minItems: 1
+          maxItems: 16
+          description: Уникальные непустые id; сейчас regular_payments целиком, включая none. Клиент заменяет только перечисленные блоки.
+          items:
+            $ref: '#/components/schemas/Block'
+        required_calc_version:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 2147483647
+          description: Target BSD для последующего полного GET, не применённая версия всего экрана.
+    CalculationState:
+      type: object
+      required: [calc_version, recalculating]
+      description: Версия применённого UserDataState и эффективный признак пересчёта, согласованно с ответом; есть и без данных.
+      properties:
+        calc_version:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 2147483647
+          description: Версия применённого UserDataState; 0, если состояния ещё нет. Не версия маркера.
+        recalculating:
+          type: boolean
+          description: Сохранённый флаг OR marker_version больше применённой версии; false и версия не ниже required_calc_version подтверждают готовность.
     Analytics:
       type: object
-      description: 'Ответ экрана «Аналитика». При `has_data: false` остальных полей нет.'
+      description: 'Ответ экрана «Аналитика». time_zone обязателен при has_data=true. При has_data=false остаётся calculation, time_zone может отсутствовать; финансовых полей нет.'
       required:
       - has_data
+      - calculation
       properties:
+        time_zone:
+          $ref: '#/components/schemas/SourceTimeZone'
+        calculation:
+          $ref: '#/components/schemas/CalculationState'
         has_data:
           type: boolean
           description: Есть ли у пользователя хоть одна операция и хоть один покрытый выпиской день. `false` — пустое состояние
@@ -3835,7 +3988,7 @@ components:
           format: date-time
           nullable: true
           description: Конец данных внутри периода — время последней операции, если она в последний покрытый день, иначе
-            23:59:59 этого дня. День берётся как есть («1–25 сентября»); не граница дня, в отличие от
+            последняя существующая секунда этого дня (при fold — поздний instant). Гражданский день берётся после перевода момента в IANA-пояс time_zone ответа, без вычитания суток («1–25 сентября»); не граница дня, в отличие от
             `AnalyticsState.data_to`.
         gaps:
           type: array
@@ -3901,9 +4054,12 @@ components:
             признак не ставит: снимки заменяются молча, по месяцам (FIN-196).
     AnalyticsPeriodsList:
       type: object
+      description: time_zone обязателен при непустом periods; без периодов и состояния может отсутствовать.
       required:
       - periods
       properties:
+        time_zone:
+          $ref: '#/components/schemas/SourceTimeZone'
         periods:
           type: array
           description: Периоды с покрытыми выпиской днями, новые первыми. Пустой — данных нет.
@@ -4096,6 +4252,9 @@ components:
       - type
       - v
       properties:
+        help_text:
+          type: string
+          description: Вспомогательное пояснение по отдельному действию; основной текст и краткая причина недоступности остаются видимыми. Пустое/отсутствующее — без иконки.
         id:
           type: string
           nullable: true
@@ -4322,14 +4481,68 @@ components:
           nullable: true
         action:
           $ref: '#/components/schemas/BlockAction'
+    ChartPage:
+      type: object
+      required: [revision]
+      properties:
+        revision:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Непрозрачная ревизия полной истории в контексте пользователя, режима и пояса; включает daily-изменения точек.
+        previous:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: Cursor страницы более ранних месяцев; отсутствует у начала истории.
+        next:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: Cursor страницы более поздних месяцев; отсутствует у конца истории.
+    MonthlyChartData:
+      allOf:
+      - $ref: '#/components/schemas/ChartData'
+      - type: object
+        required: [page]
+        properties:
+          points:
+            type: array
+            minItems: 1
+            maxItems: 60
+            items:
+              $ref: '#/components/schemas/ChartPoint'
+      description: Ограничение относится только к monthly_chart аналитики, не к другим chart.
+    AnalyticsChartPage:
+      type: object
+      required: [block, time_zone]
+      properties:
+        time_zone:
+          $ref: '#/components/schemas/SourceTimeZone'
+        block:
+          allOf:
+          - $ref: '#/components/schemas/Block'
+          - type: object
+            required: [id, status, data]
+            properties:
+              data:
+                $ref: '#/components/schemas/MonthlyChartData'
+          description: monthly_chart, chart@1, status ready; без notes/highlight_index. Клиент применяет только points/page.
     ChartData:
       type: object
-      description: '`chart` v1 — столбцы по периодам, с итогом и строками под графиком.'
+      description: |
+        chart v1 — столбцы с итогом и строками под графиком. Для monthly_chart экранной аналитики
+        points — страница до 60 полных календарных месяцев всей истории во всех типах периода (FIN-418).
+        Факты выбранного/скользящего периода и другие графики не меняются. Notes называют выбранный период.
       required:
       - kind
       - value_kind
       - points
       properties:
+        page:
+          allOf:
+          - $ref: '#/components/schemas/ChartPage'
+          description: Обязательно для monthly_chart; курсоры всей истории по api.md6.4. У других графиков отсутствует.
         kind:
           type: string
           description: '`bar` — столбцы. Неизвестный — показать `alt_text`.'
@@ -4379,7 +4592,7 @@ components:
         range:
           allOf:
           - $ref: '#/components/schemas/Range'
-          description: Период точки; подпись оси клиент формирует из него с годом. В rolling_year/rolling_quarter — пересечение месяца с выбранным интервалом; действие открывает полный месяц.
+          description: Период точки; подпись оси клиент формирует из него с годом. У monthly_chart во всех вкладках это полный календарный месяц истории; действие открывает этот месяц. Факты и notes скользящего периода считаются отдельно в его точных границах.
         value:
           type: number
           format: double
@@ -4464,6 +4677,9 @@ components:
       - id
       - title
       properties:
+        help_text:
+          type: string
+          description: Вспомогательное пояснение по отдельному действию; основной текст и краткая причина недоступности остаются видимыми. Пустое/отсутствующее — без иконки.
         id:
           type: string
         title:

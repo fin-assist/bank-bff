@@ -115,7 +115,12 @@ func (d Deps) analyticsPeriods(c *rest.Call) {
 		}
 		items = append(items, analyticsPeriodItem{Key: p.GetKey(), Range: timeRange(p.GetRange(), conv.loc), Coverage: conv.coverageCode(p.GetCoverage(), "ListPeriodsResponse.periods.coverage")})
 	}
+	if !validSourceZone(resp.GetTimeZone(), len(resp.GetPeriods()) > 0) {
+		rest.Internal().Write(c.W)
+		return
+	}
 	rest.WriteJSON(c.W, http.StatusOK, struct {
-		Periods []analyticsPeriodItem `json:"periods"`
-	}{items})
+		Periods  []analyticsPeriodItem `json:"periods"`
+		TimeZone string                `json:"time_zone,omitempty"`
+	}{items, resp.GetTimeZone()})
 }

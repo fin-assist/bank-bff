@@ -45,7 +45,7 @@ func TestIntegrationRollingTransportAndOpaqueBlocks(t *testing.T) {
 					if in.GetPeriod() != period {
 						t.Error(in)
 					}
-					return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: key, Range: fixture.Period.Range, Coverage: commonv1.Coverage_COVERAGE_PARTIAL}}}, nil
+					return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: key, Range: fixture.Period.Range, Coverage: commonv1.Coverage_COVERAGE_PARTIAL}}}, nil
 				}
 			})
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)

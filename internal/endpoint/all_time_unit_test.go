@@ -71,7 +71,7 @@ func TestUnitAllTimeInputsAndProjection(t *testing.T) {
 		if in.GetPeriod() != commonv1.PeriodType_PERIOD_TYPE_ALL_TIME || in.UserId != nil {
 			t.Fatal(in)
 		}
-		return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "all_time", Range: allTimeMessage().Period.Range, Coverage: commonv1.Coverage_COVERAGE_COMPLETE}}}, nil
+		return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: "all_time", Range: allTimeMessage().Period.Range, Coverage: commonv1.Coverage_COVERAGE_COMPLETE}}}, nil
 	}
 	if r := u.serve(t, "GET", "/v1/analytics/periods?period=all_time", "", nil); r.Code != 200 || r.json["periods"].([]any)[0].(map[string]any)["key"] != "all_time" {
 		t.Fatal(r.Code, r.Body.String())
@@ -95,7 +95,7 @@ func TestUnitAllTimeRejectsCrossedProducerKeys(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	u.f.analyticsList = func(*analyticsv1.ListPeriodsRequest) (*analyticsv1.ListPeriodsResponse, error) {
-		return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "2026", Range: fixture.Period.Range}}}, nil
+		return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: "2026", Range: fixture.Period.Range}}}, nil
 	}
 	if r := u.serve(t, "GET", "/v1/analytics/periods?period=all_time", "", nil); r.Code != 500 {
 		t.Fatal(r.Code, r.Body.String())
@@ -236,7 +236,7 @@ func TestUnitListPeriodsRejectsKeysOfOtherPeriodTypes(t *testing.T) {
 			if in.GetPeriod() != tc.period {
 				t.Error(in)
 			}
-			return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: tc.key, Range: allTimeMessage().Period.Range}}}, nil
+			return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: tc.key, Range: allTimeMessage().Period.Range}}}, nil
 		}
 		before := allTimeTranslationCount(t, u.reg, "ListPeriodsResponse.periods.key", "invalid")
 		r := u.serve(t, "GET", "/v1/analytics/periods?period="+period, "", nil)

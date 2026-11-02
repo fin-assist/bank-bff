@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
 	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
 	"github.com/fin-assist/contracts/gen/go/finerr"
@@ -85,7 +86,7 @@ func TestUnitOperationRoutesAndProjection(t *testing.T) {
 		if in.RegularPaymentId != testKey {
 			t.Fatal(in)
 		}
-		return &statementdatav1.DismissRegularPaymentResponse{}, nil
+		return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 8}, nil
 	}
 	f.restoreRegularPayment = func(in *statementdatav1.RestoreRegularPaymentRequest) (*statementdatav1.RestoreRegularPaymentResponse, error) {
 		if in.RegularPaymentId != testKey {
@@ -93,9 +94,18 @@ func TestUnitOperationRoutesAndProjection(t *testing.T) {
 		}
 		return &statementdatav1.RestoreRegularPaymentResponse{}, nil
 	}
+	u.f.analyticsApply = func(in *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+		return dismissalResponse(in), nil
+	}
 	for _, method := range []string{"PUT", "DELETE"} {
-		r := u.serve(t, method, "/v1/analytics/regular-payments/"+testKey+"/dismissal", "", nil)
-		if r.Code != 204 || r.Body.Len() != 0 || r.Header().Get("Content-Type") != "" {
+		path := "/v1/analytics/regular-payments/" + testKey + "/dismissal"
+		want := 204
+		if method == "PUT" {
+			path += "?date=2026-09&transfer_mode=with"
+			want = 200
+		}
+		r := u.serve(t, method, path, "", nil)
+		if r.Code != want {
 			t.Fatal(r.Code, r.Body.String())
 		}
 	}
@@ -225,7 +235,7 @@ func TestUnitOperationErrors(t *testing.T) {
 	for _, tc := range []struct {
 		method, path, body string
 		status             int
-	}{{"GET", "/v1/operations", "", 401}, {"GET", "/v1/operations?q=x", "", 422}, {"GET", "/v1/operations/" + testKey + "?occurred_at=" + url.QueryEscape("2026-01-01T00:00:00Z"), "", 404}, {"PATCH", "/v1/operations/" + testKey, `{"category_id":"cat","occurred_at":"2026-01-01T00:00:00Z"}`, 422}, {"GET", "/v1/categories", "", 500}, {"PUT", "/v1/analytics/regular-payments/" + testKey + "/dismissal", "", 404}, {"DELETE", "/v1/analytics/regular-payments/" + testKey + "/dismissal", "", 401}} {
+	}{{"GET", "/v1/operations", "", 401}, {"GET", "/v1/operations?q=x", "", 422}, {"GET", "/v1/operations/" + testKey + "?occurred_at=" + url.QueryEscape("2026-01-01T00:00:00Z"), "", 404}, {"PATCH", "/v1/operations/" + testKey, `{"category_id":"cat","occurred_at":"2026-01-01T00:00:00Z"}`, 422}, {"GET", "/v1/categories", "", 500}, {"PUT", "/v1/analytics/regular-payments/" + testKey + "/dismissal?date=2026-09&transfer_mode=with", "", 404}, {"DELETE", "/v1/analytics/regular-payments/" + testKey + "/dismissal", "", 401}} {
 		r := u.serve(t, tc.method, tc.path, tc.body, nil)
 		if r.Code != tc.status || strings.Contains(r.Body.String(), "SECRET") {
 			t.Fatal(r.Code, r.Body.String())

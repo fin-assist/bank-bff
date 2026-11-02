@@ -63,8 +63,10 @@ type StatementsClient interface {
 	ListUnreadLines(context.Context, *statementdatav1.ListUnreadLinesRequest, ...grpc.CallOption) (*statementdatav1.ListUnreadLinesResponse, error)
 }
 
-// AnalyticsClient is the read API of analytics.AnalyticsService.
+// AnalyticsClient is the user API of analytics.AnalyticsService.
 type AnalyticsClient interface {
+	GetChartPage(context.Context, *analyticsv1.GetChartPageRequest, ...grpc.CallOption) (*analyticsv1.GetChartPageResponse, error)
+	ApplyRegularPaymentDismissal(context.Context, *analyticsv1.ApplyRegularPaymentDismissalRequest, ...grpc.CallOption) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error)
 	GetAnalytics(context.Context, *analyticsv1.GetAnalyticsRequest, ...grpc.CallOption) (*analyticsv1.GetAnalyticsResponse, error)
 	ListPeriods(context.Context, *analyticsv1.ListPeriodsRequest, ...grpc.CallOption) (*analyticsv1.ListPeriodsResponse, error)
 }
@@ -141,9 +143,10 @@ func orDefault(v, def time.Duration) time.Duration {
 	return def
 }
 
-// Routes are all 30 public contract operations.
+// Routes are all 31 public contract operations.
 func (d Deps) Routes() []rest.Route {
 	return []rest.Route{
+		{Method: http.MethodGet, Path: "/v1/analytics/charts/monthly_chart", Protected: rest.Always, ReplaySafe: true, Handle: d.analyticsChartPage},
 		{Method: http.MethodGet, Path: "/v1/operations", Protected: rest.Always, ReplaySafe: true, Handle: d.listOperations},
 		{Method: http.MethodGet, Path: "/v1/operations/{id}", Protected: rest.Always, ReplaySafe: true, Handle: d.getOperation},
 		{Method: http.MethodPatch, Path: "/v1/operations/{id}", Protected: rest.Always, ReplaySafe: true, Handle: d.changeCategory},

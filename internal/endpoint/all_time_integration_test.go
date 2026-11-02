@@ -52,7 +52,7 @@ func TestIntegrationAllTimeTransportAndComposition(t *testing.T) {
 				if in.GetPeriod() != commonv1.PeriodType_PERIOD_TYPE_ALL_TIME {
 					t.Error(in)
 				}
-				return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: "all_time", Range: fixture.Period.Range, Coverage: commonv1.Coverage_COVERAGE_COMPLETE}}}, nil
+				return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: "all_time", Range: fixture.Period.Range, Coverage: commonv1.Coverage_COVERAGE_COMPLETE}}}, nil
 			}
 		})
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -188,7 +188,7 @@ func TestIntegrationListPeriodsRejectsKeysOfOtherPeriodTypes(t *testing.T) {
 				if in.GetPeriod() != tc.period {
 					t.Error(in)
 				}
-				return &analyticsv1.ListPeriodsResponse{Periods: []*analyticsv1.PeriodItem{{Key: tc.key, Range: allTimeMessage().Period.Range}}}, nil
+				return &analyticsv1.ListPeriodsResponse{TimeZone: "Europe/Moscow", Periods: []*analyticsv1.PeriodItem{{Key: tc.key, Range: allTimeMessage().Period.Range}}}, nil
 			}
 		})
 		period, _ := enumCode(tc.period)

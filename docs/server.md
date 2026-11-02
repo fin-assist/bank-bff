@@ -18,10 +18,11 @@ Operational listener публикует только `GET/HEAD /healthz`, `/read
 | `GET /v1/operations/{id}` | `statementdata.OperationsService/GetOperation` | да | — |
 | `PATCH /v1/operations/{id}` | `statementdata.OperationsService/ChangeCategory` | да | — |
 | `GET /v1/categories` | `statementdata.CategoriesService/ListCategories` | да | — |
-| `PUT /v1/analytics/regular-payments/{id}/dismissal` | `statementdata.RegularPaymentsService/DismissRegularPayment` | да | — |
+| `PUT /v1/analytics/regular-payments/{id}/dismissal` | `statementdata.RegularPaymentsService/DismissRegularPayment` → `analytics.AnalyticsService/ApplyRegularPaymentDismissal` | да | — |
 | `DELETE /v1/analytics/regular-payments/{id}/dismissal` | `statementdata.RegularPaymentsService/RestoreRegularPayment` | да | — |
 | `GET /v1/analytics` | `analytics.AnalyticsService/GetAnalytics` | да | — |
 | `GET /v1/analytics/periods` | `analytics.AnalyticsService/ListPeriods` | да | — |
+| `GET /v1/analytics/charts/monthly_chart` | `analytics.AnalyticsService/GetChartPage` | да | — |
 | `POST /v1/auth/phone` | `user.AuthService/StartPhoneVerification` | нет | да |
 | `GET /v1/auth/phone/events` (SSE) | `user.AuthService/WatchPhoneVerification` | `X-Verification-Token` → поле запроса | — |
 | `POST /v1/auth/register` | `user.AuthService/Register` | нет | да |
@@ -45,7 +46,7 @@ Operational listener публикует только `GET/HEAD /healthz`, `/read
 | `DELETE /v1/statements/{upload_id}` | `statementdata.StatementsService/DeleteUpload` | да | — |
 | `GET /v1/statements/unread-lines` | `statementdata.StatementsService/ListUnreadLines` | да | — |
 
-Все 30 операций встроенного OpenAPI доступны. Неизвестные пути и методы `/v1` отвечают JSON 404 `NOT_FOUND`; наличие HTTP-адаптеров не подтверждает сквозную готовность продукта к prod. Браузерный preflight `OPTIONS` (веб-клиент вне MVP) не обрабатывается.
+Все 31 операция встроенного OpenAPI доступна. Неизвестные пути и методы `/v1` отвечают JSON 404 `NOT_FOUND`; наличие HTTP-адаптеров не подтверждает сквозную готовность продукта к prod. Браузерный preflight `OPTIONS` (веб-клиент вне MVP) не обрабатывается.
 
 ## Порядок проверок запроса
 
@@ -150,7 +151,7 @@ GET и известный идемпотентный DELETE объявляют �
 моменты period/state/верхнего lock/action.filter форматируются в time_zone ответа с сохранением наносекунд;
 календарные ключи и уже сформированные строки Struct не меняются. Период включает gaps и coverage,
 соседние ключи — явный null при отсутствии, пустые списки — `[]`. Старые поля tiles/insights не читаются.
-`has_data=false` даёт только этот флаг и не считает currency дефектом. Неизвестная coverage — partial;
+`has_data=false` даёт этот флаг и обязательный calculation и не считает currency дефектом. Неизвестная coverage — partial;
 непредставимый обязательный params.period — безопасный500 и ограниченная untranslated-метрика.
 
 Пустая currency при наличии данных временно заменяется на RUB (FIN-98); пустой верхний Block.lock.text —
@@ -240,3 +241,13 @@ REST retryable остаётся отдельным решением и треб�
 временный RUB fallback FIN-98 относится только к оговорённым ответам analytics/assistant. Неизвестные
 направления категории пропускаются со счётчиком; остальные поля категорий, включая icon, сохраняются.
 PUT/DELETE отметки принимают только каноничный lowercase UUID и отвечают 204 без тела.
+
+## Обновление аналитики FIN-416
+
+Принят FIN-418 (2cbca8a,gen/go/v0.10.0). PUT «Не подписка» требует date=YYYY-MM и transfer_mode=with/without до BSD. Первый boundedRPC сохраняет assignment и возвращает target; второй analytics.ApplyRegularPaymentDismissal компонует полные blocks из собственной БД. BFF переносит params/currency/time_zone/blocks/required_calc_version в200, проверяет контекст/target, уникальные ID и обязательный regular_payments. Ошибка после BSD не откатывает assignment и не превращается в200:422 ANALYTICS_CONTEXT_UNAVAILABLE сообщает о сохранённом изменении и запрещает повтор прежнего контекста; временный отказ500 следует явному service-owned permission. Скрытого повтораRPC нет. DELETE restore остаётся204.
+
+GET analytics передаёт calculation и при has_data=false; отрицательная версия/несовпадающие флаги не подтверждают готовность. GET страницы передаёт cursor1–2048символов, block и time_zone. Точки/ревизия принадлежат analytics. Пустойcursor даёт REQUIRED, дубли — INVALID_FORMAT.
+
+Фактический time_zone переносится из сервиса в аналитику, периоды, блоки мутации, страницы, конфигурацию/итог импорта и ленту/поиск. Профиль не читается, отсутствие обязательного/неразрешимый пояс дают500. Исторические смещения с секундами сериализуются вUTC (RFC3339 имеет минутную точность); момент и sourcezone сохраняются.
+
+Конфигурация выписки принимает period_from/period_to как включительные календарные дни. BFF проверяет одиночность, непустое значение, точный формат/дату0001–9999 и передаёт строки без пересчёта. Парность, порядок, сегодня в поясе источника и timestamp-границы проверяет BSD. Без дат прежняя рекомендация сохраняется. Банковскийhost/URL клиентом не задаются.

@@ -9,13 +9,20 @@ import (
 )
 
 type analyticsResponse struct {
-	HasData    bool                 `json:"has_data"`
-	Params     *AnalyticsParams     `json:"params,omitempty"`
-	Currency   string               `json:"currency,omitempty"`
-	Period     *analyticsPeriod     `json:"period,omitempty"`
-	Navigation *analyticsNavigation `json:"navigation,omitempty"`
-	Blocks     *[]analyticsBlock    `json:"blocks,omitempty"`
-	State      *analyticsState      `json:"state,omitempty"`
+	TimeZone    string               `json:"time_zone,omitempty"`
+	Calculation *calculationState    `json:"calculation"`
+	HasData     bool                 `json:"has_data"`
+	Params      *AnalyticsParams     `json:"params,omitempty"`
+	Currency    string               `json:"currency,omitempty"`
+	Period      *analyticsPeriod     `json:"period,omitempty"`
+	Navigation  *analyticsNavigation `json:"navigation,omitempty"`
+	Blocks      *[]analyticsBlock    `json:"blocks,omitempty"`
+	State       *analyticsState      `json:"state,omitempty"`
+}
+
+type calculationState struct {
+	CalcVersion   int32 `json:"calc_version"`
+	Recalculating bool  `json:"recalculating"`
 }
 
 type analyticsPeriod struct {
@@ -53,6 +60,7 @@ type analyticsPeriodItem struct {
 // through without inspecting nested primitives, locks or actions (grpc-api 5.3).
 type analyticsBlock struct {
 	ID        string           `json:"id,omitempty"`
+	HelpText  *string          `json:"help_text,omitempty"`
 	Type      string           `json:"type"`
 	V         int32            `json:"v"`
 	Status    string           `json:"status,omitempty"`
@@ -93,7 +101,7 @@ func (c converter) analyticsBlock(b *commonv1.Block) analyticsBlock {
 	if b == nil {
 		return analyticsBlock{}
 	}
-	out := analyticsBlock{ID: b.GetId(), Type: b.GetType(), V: b.GetV(), Status: b.GetStatus(), Title: b.Title, AltText: b.AltText, EmptyText: b.EmptyText}
+	out := analyticsBlock{ID: b.GetId(), Type: b.GetType(), V: b.GetV(), Status: b.GetStatus(), Title: b.Title, AltText: b.AltText, EmptyText: b.EmptyText, HelpText: b.HelpText}
 	if b.Data != nil {
 		out.Data = b.Data.AsMap()
 	}
@@ -126,7 +134,18 @@ func (c converter) analyticsBlock(b *commonv1.Block) analyticsBlock {
 }
 
 func (c converter) analytics(resp *analyticsv1.GetAnalyticsResponse, requestedPeriod commonv1.PeriodType) (analyticsResponse, bool) {
-	out := analyticsResponse{HasData: resp.GetHasData()}
+	out := analyticsResponse{HasData: resp.GetHasData(), TimeZone: resp.GetTimeZone()}
+	calc := resp.GetCalculation()
+	if calc == nil || calc.GetCalcVersion() < 0 {
+		return c.analyticsInvalid("GetAnalyticsResponse.calculation", "invalid")
+	}
+	out.Calculation = &calculationState{CalcVersion: calc.GetCalcVersion(), Recalculating: calc.GetRecalculating()}
+	if resp.GetHasData() && (resp.GetState() != nil && resp.GetState().GetRecalculating() != calc.GetRecalculating()) {
+		return c.analyticsInvalid("GetAnalyticsResponse.calculation", "invalid")
+	}
+	if !validSourceZone(resp.GetTimeZone(), resp.GetHasData()) {
+		return c.analyticsInvalid("GetAnalyticsResponse.time_zone", "invalid")
+	}
 	if !out.HasData {
 		return out, true
 	}

@@ -114,6 +114,7 @@ func newPublicAPI(cfg config.Config, log *slog.Logger, reg prometheus.Registerer
 	if api.analytics, err = dial(a.AnalyticsAddr, "analytics", []string{
 		analyticsv1.AnalyticsService_GetAnalytics_FullMethodName[1:],
 		analyticsv1.AnalyticsService_ListPeriods_FullMethodName[1:],
+		analyticsv1.AnalyticsService_GetChartPage_FullMethodName[1:],
 	}); err != nil {
 		return nil, err
 	}

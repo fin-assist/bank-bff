@@ -195,7 +195,7 @@ func scenarioStreamLimit(t *testing.T, start starter) {
 			if err := stream.Send(&statementdatav1.WatchUploadResponse{Event: &statementdatav1.WatchUploadResponse_Progress{Progress: &statementdatav1.ImportProgress{Stage: 1, Percent: 1}}}); err != nil {
 				return err
 			}
-			return stream.Send(&statementdatav1.WatchUploadResponse{Event: &statementdatav1.WatchUploadResponse_Complete{Complete: importResultFixture()}})
+			return stream.Send(&statementdatav1.WatchUploadResponse{TimeZone: "Europe/Moscow", Event: &statementdatav1.WatchUploadResponse_Complete{Complete: importResultFixture()}})
 		}
 	})
 	// Capacity is free again: the same GETs can open successfully. The published

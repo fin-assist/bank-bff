@@ -262,14 +262,22 @@ func (d Deps) listCategories(c *rest.Call) {
 }
 
 func (d Deps) dismissRegularPayment(c *rest.Call) {
+	params, ok := dismissalParams(c)
+	if !ok {
+		return
+	}
 	ctx, cancel := unary(c)
 	defer cancel()
-	_, err := d.RegularPayments.DismissRegularPayment(ctx, &statementdatav1.DismissRegularPaymentRequest{RegularPaymentId: c.R.PathValue("id")})
+	in, err := d.RegularPayments.DismissRegularPayment(ctx, &statementdatav1.DismissRegularPaymentRequest{RegularPaymentId: c.R.PathValue("id")})
 	if err != nil {
 		c.Fail(err)
 		return
 	}
-	c.W.WriteHeader(http.StatusNoContent)
+	if in.GetCalcVersion() <= 0 {
+		c.Refuse(rest.Internal(), true)
+		return
+	}
+	d.applyDismissal(c, params, in.GetCalcVersion())
 }
 
 func (d Deps) restoreRegularPayment(c *rest.Call) {

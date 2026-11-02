@@ -59,6 +59,7 @@ type feedStateJSON struct {
 	LastUploadedAt  *string `json:"last_uploaded_at,omitempty"`
 }
 type feedJSON struct {
+	TimeZone   string             `json:"time_zone,omitempty"`
 	Items      []operationJSON    `json:"items"`
 	Summary    []monthSummaryJSON `json:"summary"`
 	State      *feedStateJSON     `json:"state"`
@@ -66,6 +67,7 @@ type feedJSON struct {
 	NextBefore *string            `json:"next_before,omitempty"`
 }
 type searchJSON struct {
+	TimeZone     string          `json:"time_zone,omitempty"`
 	Items        []operationJSON `json:"items"`
 	TotalCount   int32           `json:"total_count"`
 	Range        *Range          `json:"range,omitempty"`
@@ -154,7 +156,7 @@ func (c converter) operationFeed(in *statementdatav1.ListFeedResponse) (feedJSON
 			return feedJSON{}, false
 		}
 	}
-	out := feedJSON{Items: items, Summary: make([]monthSummaryJSON, 0, len(in.GetSummary())), Range: timeRange(in.GetRange(), c.loc), NextBefore: optionalMoment(in.NextBefore, c.loc), State: &feedStateJSON{Stale: state.GetStale(), DataTo: optionalMoment(state.DataTo, c.loc), LastOperationAt: optionalMoment(state.LastOperationAt, c.loc), LastUploadedAt: optionalMoment(state.LastUploadedAt, c.loc)}}
+	out := feedJSON{TimeZone: in.GetTimeZone(), Items: items, Summary: make([]monthSummaryJSON, 0, len(in.GetSummary())), Range: timeRange(in.GetRange(), c.loc), NextBefore: optionalMoment(in.NextBefore, c.loc), State: &feedStateJSON{Stale: state.GetStale(), DataTo: optionalMoment(state.DataTo, c.loc), LastOperationAt: optionalMoment(state.LastOperationAt, c.loc), LastUploadedAt: optionalMoment(state.LastUploadedAt, c.loc)}}
 	for _, s := range in.GetSummary() {
 		// Month is a calendar key supplied by the service, not a date to convert.
 		if _, err := time.Parse("2006-01", s.GetMonth()); err != nil {
@@ -165,6 +167,10 @@ func (c converter) operationFeed(in *statementdatav1.ListFeedResponse) (feedJSON
 			return feedJSON{}, false
 		}
 		out.Summary = append(out.Summary, monthSummaryJSON{Month: s.GetMonth(), Range: timeRange(s.GetRange(), c.loc), Expense: s.GetExpenseMinor(), Income: s.GetIncomeMinor(), DataTo: optionalMoment(s.DataTo, c.loc)})
+	}
+	if !validSourceZone(in.GetTimeZone(), true) {
+		c.metrics.Untranslated("ListFeedResponse.time_zone", "invalid")
+		return feedJSON{}, false
 	}
 	return out, true
 }
@@ -180,5 +186,9 @@ func (c converter) operationSearch(in *statementdatav1.SearchOperationsResponse)
 	if in.Range != nil && !c.analyticsRange(in.Range, "SearchOperationsResponse.range") {
 		return searchJSON{}, false
 	}
-	return searchJSON{Items: items, TotalCount: in.GetTotalCount(), Range: timeRange(in.Range, c.loc), HasOlderData: in.HasOlderData}, true
+	if !validSourceZone(in.GetTimeZone(), len(items) > 0 || in.GetRange() != nil) {
+		c.metrics.Untranslated("SearchOperationsResponse.time_zone", "invalid")
+		return searchJSON{}, false
+	}
+	return searchJSON{TimeZone: in.GetTimeZone(), Items: items, TotalCount: in.GetTotalCount(), Range: timeRange(in.Range, c.loc), HasOlderData: in.HasOlderData}, true
 }
