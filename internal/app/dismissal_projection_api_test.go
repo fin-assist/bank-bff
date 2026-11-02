@@ -73,3 +73,70 @@ func TestAPIDismissalRejectsUnboundSourceAndPreservesContextRefusal(t *testing.T
 		}
 	}
 }
+
+func TestAPIComposerFailuresAfterCommitCannotClaimMissingAssignment(t *testing.T) {
+	b := startBFF(t, nil)
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access(testpeer.UserID)})
+	req := request{method: "PUT", path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal?date=2026-09&transfer_mode=with",
+		route: "/v1/analytics/regular-payments/{id}/dismissal", header: auth}
+	b.peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
+		p.DismissRegularPaymentFunc = func(_ context.Context, in *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
+			return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42, Projection: dismissalAPIProjection(in.Params)}, nil
+		}
+	})
+	for _, failure := range []error{
+		finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "date", Reason: "OUT_OF_RANGE", Description: "SECRET"}),
+		finerr.NotFound(), finerr.AnalyticsContextUnavailable(),
+	} {
+		for _, permission := range []bool{false, true} {
+			b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+				a.ApplyFunc = func(context.Context, *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+					return nil, finerr.WithRequestRetryInfo(failure, permission)
+				}
+			})
+			writes := len(b.peers.Calls(statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName))
+			applies := len(b.peers.Calls(analyticsv1.AnalyticsService_ApplyRegularPaymentDismissal_FullMethodName))
+			r := b.do(t, req)
+			if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || r.json["error"].(map[string]any)["retryable"] != permission ||
+				strings.Contains(string(r.body), "SECRET") ||
+				len(b.peers.Calls(statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName)) != writes+1 ||
+				len(b.peers.Calls(analyticsv1.AnalyticsService_ApplyRegularPaymentDismissal_FullMethodName)) != applies+1 {
+				t.Fatal(r.StatusCode, string(r.body))
+			}
+		}
+	}
+	for _, corrupt := range []func(*analyticsv1.ApplyRegularPaymentDismissalResponse){
+		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Blocks[0].Data = nil },
+		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) {
+			r.Blocks[0].Type = "future_type"
+			r.Blocks[0].Status = "ready"
+			r.Blocks[0].Data = nil
+		},
+		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) {
+			r.Blocks[0].Type = "tile_group"
+			r.Blocks[0].Data = nil
+		},
+	} {
+		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.ApplyFunc = func(_ context.Context, in *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+				out := dismissalAPIResponse(in)
+				corrupt(out)
+				return out, nil
+			}
+		})
+		r := b.do(t, req)
+		if r.StatusCode != 500 || r.json["error"].(map[string]any)["retryable"] != false {
+			t.Fatal(r.StatusCode, string(r.body))
+		}
+	}
+	waitUntil := retryAt()
+	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+		a.ApplyFunc = func(context.Context, *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+			return nil, finerr.WithRequestRetryInfo(finerr.RateLimited(waitUntil), true)
+		}
+	})
+	r := b.do(t, req)
+	if r.StatusCode != 500 || r.Header.Get("Retry-After") == "" || r.json["error"].(map[string]any)["retryable"] != true {
+		t.Fatal(r.StatusCode, string(r.body), r.Header)
+	}
+}

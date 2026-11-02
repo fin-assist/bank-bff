@@ -109,14 +109,16 @@ func (d Deps) applyDismissal(c *rest.Call, params *commonv1.AnalyticsParams, tar
 		RegularPaymentId: c.R.PathValue("id"), CalcVersion: target, Params: params, Projection: projection,
 	})
 	if err != nil {
-		c.Fail(err)
+		// BSD already committed: only authentication can still be a client refusal.
+		// A composer validation/context/not-found error must never assert that the write did not occur.
+		c.FailAs(err, map[int]bool{http.StatusUnauthorized: true, http.StatusInternalServerError: true})
 		return
 	}
 	if resp.GetRequiredCalcVersion() != target || resp.GetTimeZone() != projection.GetTimeZone() || resp.GetCurrency() != projection.GetCurrency() ||
 		!validSourceZone(resp.GetTimeZone(), true) || !analyticsCurrency.MatchString(resp.GetCurrency()) || resp.GetParams() == nil ||
 		resp.GetParams().GetPeriod() != params.GetPeriod() || resp.GetParams().GetPeriodKey() != params.GetPeriodKey() || resp.GetParams().GetTransferMode() != params.GetTransferMode() ||
 		len(resp.GetBlocks()) < 1 || len(resp.GetBlocks()) > 16 {
-		c.Refuse(rest.Internal(), true)
+		c.Refuse(rest.Internal(), false)
 		return
 	}
 	conv := converter{loc: zone(resp.GetTimeZone()), metrics: c.Metrics}
@@ -124,18 +126,27 @@ func (d Deps) applyDismissal(c *rest.Call, params *commonv1.AnalyticsParams, tar
 	out.Params, _ = analyticsParams(resp.GetParams())
 	ids := make(map[string]bool, len(resp.GetBlocks()))
 	for _, b := range resp.GetBlocks() {
-		if b.GetId() == "" || ids[b.GetId()] || b.GetType() == "" || b.GetV() < 1 {
-			c.Refuse(rest.Internal(), true)
+		if b.GetId() == "" || ids[b.GetId()] || b.GetType() == "" || b.GetV() < 1 || !updatedBlockDataPresent(b) {
+			c.Refuse(rest.Internal(), false)
 			return
 		}
 		ids[b.GetId()] = true
 		out.Blocks = append(out.Blocks, conv.analyticsBlock(b))
 	}
 	if !ids["regular_payments"] {
-		c.Refuse(rest.Internal(), true)
+		c.Refuse(rest.Internal(), false)
 		return
 	}
 	rest.WriteJSON(c.W, http.StatusOK, out)
+}
+
+// updatedBlockDataPresent enforces only the primitive envelope, never financial contents.
+func updatedBlockDataPresent(b *commonv1.Block) bool {
+	if b.GetData() != nil {
+		return true
+	}
+	return b.GetType() != "insight_card" && b.GetType() != "tile_group" &&
+		b.GetStatus() != "" && b.GetStatus() != "ready" && b.GetStatus() != "tentative"
 }
 
 func (d Deps) analyticsChartPage(c *rest.Call) {

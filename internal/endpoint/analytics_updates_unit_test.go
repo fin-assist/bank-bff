@@ -23,7 +23,7 @@ func dismissalProjection(params *commonv1.AnalyticsParams) *analyticsv1.MetricPr
 
 func dismissalResponse(in *analyticsv1.ApplyRegularPaymentDismissalRequest) *analyticsv1.ApplyRegularPaymentDismissalResponse {
 	return &analyticsv1.ApplyRegularPaymentDismissalResponse{Params: in.Params, TimeZone: "Asia/Vladivostok", Currency: "RUB", RequiredCalcVersion: in.CalcVersion,
-		Blocks: []*commonv1.Block{{Id: "regular_payments", Type: "insight_card", V: 1, Status: "none", EmptyText: proto.String("Регулярных платежей не нашли"), AltText: proto.String("Регулярных платежей не нашли"), HelpText: proto.String("Методика")}}}
+		Blocks: []*commonv1.Block{{Id: "regular_payments", Type: "insight_card", V: 1, Status: "none", EmptyText: proto.String("Регулярных платежей не нашли"), AltText: proto.String("Регулярных платежей не нашли"), HelpText: proto.String("Методика"), Data: &structpb.Struct{Fields: map[string]*structpb.Value{"icon": structpb.NewStringValue("repeat"), "title": structpb.NewStringValue("Регулярные платежи")}}}}}
 }
 
 func TestUnitDismissalUpdatedBlockAndValidation(t *testing.T) {
@@ -82,6 +82,7 @@ func TestUnitDismissalUpdatedBlockAndValidation(t *testing.T) {
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Blocks = nil },
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Blocks = append(r.Blocks, r.Blocks[0]) },
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Blocks[0].Id = "other" },
+		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Blocks[0].Data = nil },
 	} {
 		u.f.analyticsApply = func(in *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
 			r := dismissalResponse(in)
@@ -89,7 +90,7 @@ func TestUnitDismissalUpdatedBlockAndValidation(t *testing.T) {
 			return r, nil
 		}
 		r = u.serve(t, "PUT", path+"?date=2026-09&transfer_mode=without", "", nil)
-		if r.Code != 500 || r.json["error"].(map[string]any)["retryable"] != true {
+		if r.Code != 500 || r.json["error"].(map[string]any)["retryable"] != false {
 			t.Fatal(r.Code, r.Body.String())
 		}
 	}

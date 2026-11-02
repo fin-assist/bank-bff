@@ -8,6 +8,9 @@ import (
 	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
 	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
+	"github.com/fin-assist/contracts/gen/go/finerr"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/fin-assist/bank-bff/internal/rest"
@@ -100,5 +103,65 @@ func TestUnitDismissalRequiresVerifiedPrincipalBeforeWriting(t *testing.T) {
 	Deps{}.dismissRegularPayment(&rest.Call{R: r, W: w})
 	if w.Code != 500 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestUnitDismissalComposerRefusalsRemainUnknownWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		retry  bool
+	}{
+		{"validation without permission", finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "date", Reason: "OUT_OF_RANGE", Description: "SECRET"}), 500, false},
+		{"validation with permission", finerr.WithRequestRetryInfo(finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "date", Reason: "OUT_OF_RANGE"}), true), 500, true},
+		{"malformed validation", finerr.WithRequestRetryInfo(finerr.ValidationError(), true), 500, false},
+		{"not found", finerr.WithRequestRetryInfo(finerr.NotFound(), false), 500, false},
+		{"saved context", finerr.WithRequestRetryInfo(finerr.AnalyticsContextUnavailable(), false), 500, false},
+		{"authentication", finerr.TokenRevoked(), 401, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := newUnitAPI(t, rest.StreamLimits{})
+			writes, applies := 0, 0
+			u.operations.dismissRegularPayment = func(in *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
+				writes++
+				return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42, Projection: dismissalProjection(in.Params)}, nil
+			}
+			u.f.analyticsApply = func(*analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+				applies++
+				return nil, tc.err
+			}
+			r := u.serve(t, "PUT", "/v1/analytics/regular-payments/"+testKey+"/dismissal?date=2026-09&transfer_mode=with", "", nil)
+			if r.Code != tc.status || r.json["error"].(map[string]any)["retryable"] != tc.retry || writes != 1 || applies != 1 || strings.Contains(r.Body.String(), "SECRET") {
+				t.Fatal(r.Code, r.Body.String(), writes, applies)
+			}
+		})
+	}
+}
+
+func TestUnitDismissalProjectionExactWireLimit(t *testing.T) {
+	for _, extra := range []int{0, 1} {
+		u := newUnitAPI(t, rest.StreamLimits{})
+		applies := 0
+		u.operations.dismissRegularPayment = func(in *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
+			p := dismissalProjection(in.Params)
+			want := (3 << 20) + extra
+			// A two-byte field tag and four-byte length precede this >2 MiB opaque value.
+			raw := protowire.AppendTag(nil, 127, protowire.BytesType)
+			raw = protowire.AppendBytes(raw, make([]byte, want-proto.Size(p)-6))
+			p.ProtoReflect().SetUnknown(raw)
+			if proto.Size(p) != want {
+				t.Fatal("fixture is not at the exact wire boundary", proto.Size(p), want)
+			}
+			return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42, Projection: p}, nil
+		}
+		u.f.analyticsApply = func(in *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+			applies++
+			return dismissalResponse(in), nil
+		}
+		r := u.serve(t, "PUT", "/v1/analytics/regular-payments/"+testKey+"/dismissal?date=2026-09&transfer_mode=with", "", nil)
+		if extra == 0 && (r.Code != 200 || applies != 1) || extra == 1 && (r.Code != 500 || applies != 0) {
+			t.Fatal(extra, r.Code, applies, r.Body.String())
+		}
 	}
 }

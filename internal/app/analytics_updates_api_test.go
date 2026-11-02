@@ -24,7 +24,7 @@ func dismissalAPIProjection(params *commonv1.AnalyticsParams) *analyticsv1.Metri
 
 func dismissalAPIResponse(in *analyticsv1.ApplyRegularPaymentDismissalRequest) *analyticsv1.ApplyRegularPaymentDismissalResponse {
 	return &analyticsv1.ApplyRegularPaymentDismissalResponse{Params: in.Params, TimeZone: "Asia/Vladivostok", Currency: "RUB", RequiredCalcVersion: in.CalcVersion,
-		Blocks: []*commonv1.Block{{Id: "regular_payments", Type: "insight_card", V: 1, Status: "none", EmptyText: proto.String("Регулярных платежей не нашли"), AltText: proto.String("Регулярных платежей не нашли"), HelpText: proto.String("Методика")}}}
+		Blocks: []*commonv1.Block{{Id: "regular_payments", Type: "insight_card", V: 1, Status: "none", EmptyText: proto.String("Регулярных платежей не нашли"), AltText: proto.String("Регулярных платежей не нашли"), HelpText: proto.String("Методика"), Data: &structpb.Struct{Fields: map[string]*structpb.Value{"icon": structpb.NewStringValue("repeat"), "title": structpb.NewStringValue("Регулярные платежи")}}}}}
 }
 
 func TestAPIUpdatedDismissalComposesAfterCommitAndRetries(t *testing.T) {
@@ -235,7 +235,7 @@ func TestAPIInvalidAnalyticsEnvelopesAreNotSuccessful(t *testing.T) {
 		beforeWrites := len(b.peers.Calls(statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName))
 		beforeApplies := len(b.peers.Calls(analyticsv1.AnalyticsService_ApplyRegularPaymentDismissal_FullMethodName))
 		r := b.do(t, request{method: "PUT", path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal?date=2026-09&transfer_mode=without", route: "/v1/analytics/regular-payments/{id}/dismissal", header: auth})
-		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || r.json["error"].(map[string]any)["retryable"] != true ||
+		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || r.json["error"].(map[string]any)["retryable"] != false ||
 			len(b.peers.Calls(statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName)) != beforeWrites+1 ||
 			len(b.peers.Calls(analyticsv1.AnalyticsService_ApplyRegularPaymentDismissal_FullMethodName)) != beforeApplies+1 {
 			t.Fatal(r.StatusCode, string(r.body))
