@@ -16,8 +16,10 @@ import (
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
 	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
 	"github.com/fin-assist/contracts/gen/go/finerr"
+	identity "github.com/fin-assist/go-identity"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/fin-assist/bank-bff/internal/apispec"
@@ -45,16 +47,22 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 	var writes, pages, configs atomic.Int32
 	peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
 		p.DismissRegularPaymentFunc = func(_ context.Context, r *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
-			if r.RegularPaymentId != testKey {
+			if r.RegularPaymentId != testKey || r.GetParams().GetPeriodKey() != "2026-09" {
 				t.Error(r)
 			}
 			writes.Add(1)
-			return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42}, nil
+			projection := dismissalProjection(r.Params)
+			projection.ProtoReflect().SetUnknown([]byte{0xf8, 0x07, 0x01})
+			projection.Params.ProtoReflect().SetUnknown([]byte{0xf8, 0x07, 0x01})
+			return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42, Projection: projection}, nil
 		}
 	})
 	peers.Analytics.Set(func(a *testpeer.Analytics) {
 		a.ApplyFunc = func(_ context.Context, r *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
-			if r.GetCalcVersion() != 42 || r.GetParams().GetPeriodKey() != "2026-09" || writes.Load() == 0 {
+			expected := dismissalProjection(r.Params)
+			expected.ProtoReflect().SetUnknown([]byte{0xf8, 0x07, 0x01})
+			expected.Params.ProtoReflect().SetUnknown([]byte{0xf8, 0x07, 0x01})
+			if r.GetCalcVersion() != 42 || r.GetParams().GetPeriodKey() != "2026-09" || writes.Load() == 0 || !proto.Equal(r.Projection, expected) {
 				t.Error(r)
 			}
 			return dismissalResponse(r), nil
@@ -94,7 +102,11 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 			route.handle(&rest.Call{W: w, R: r, Metrics: metrics, Log: slog.New(slog.DiscardHandler), Op: op})
 		})
 	}
-	server := httptest.NewServer(mux)
+	auth, err := identity.NewHTTP(unitUserChecker{}, func(w http.ResponseWriter, _ *http.Request, _ error) { rest.InvalidToken().Write(w) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(auth.Middleware(mux))
 	t.Cleanup(server.Close)
 	client := &http.Client{Timeout: 5 * time.Second}
 	call := func(method, path string) (int, map[string]any) {
@@ -104,6 +116,7 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 			t.Fatal(e)
 		}
 		req.Header.Set("X-Client-Version", "android/0.2.16+1")
+		req.Header.Set("Authorization", goodToken)
 		r, e := client.Do(req)
 		if e != nil {
 			t.Fatal(e)
@@ -128,8 +141,8 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 	if code != 400 || writes.Load() != 1 {
 		t.Fatal(code, writes.Load())
 	}
-	peers.Analytics.Set(func(a *testpeer.Analytics) {
-		a.ApplyFunc = func(context.Context, *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+	peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
+		p.DismissRegularPaymentFunc = func(context.Context, *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
 			return nil, finerr.WithRequestRetryInfo(finerr.AnalyticsContextUnavailable(), false)
 		}
 	})
@@ -175,6 +188,11 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 			t.Fatal(code, out)
 		}
 	}
+	peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
+		p.DismissRegularPaymentFunc = func(_ context.Context, r *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
+			return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42, Projection: dismissalProjection(r.Params)}, nil
+		}
+	})
 	peers.Analytics.Set(func(a *testpeer.Analytics) {
 		a.ApplyFunc = func(_ context.Context, r *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
 			out := dismissalResponse(r)

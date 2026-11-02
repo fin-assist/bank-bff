@@ -14,7 +14,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/fin-assist/bank-bff/internal/rest"
+	"github.com/fin-assist/bank-bff/internal/testpeer"
 )
+
+func dismissalProjection(params *commonv1.AnalyticsParams) *analyticsv1.MetricProjection {
+	return testpeer.DismissalProjection(params, testpeer.UserID)
+}
 
 func dismissalResponse(in *analyticsv1.ApplyRegularPaymentDismissalRequest) *analyticsv1.ApplyRegularPaymentDismissalResponse {
 	return &analyticsv1.ApplyRegularPaymentDismissalResponse{Params: in.Params, TimeZone: "Asia/Vladivostok", Currency: "RUB", RequiredCalcVersion: in.CalcVersion,
@@ -30,7 +35,7 @@ func TestUnitDismissalUpdatedBlockAndValidation(t *testing.T) {
 		if in.RegularPaymentId != testKey {
 			t.Fatal(in)
 		}
-		return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42}, nil
+		return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42, Projection: dismissalProjection(in.Params)}, nil
 	}
 	u.f.analyticsApply = func(in *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
 		if in.CalcVersion != 42 || in.RegularPaymentId != testKey || in.Params.GetPeriodKey() != "2026-09" || in.Params.GetTransferMode() != commonv1.TransferMode_TRANSFER_MODE_WITHOUT {
@@ -49,13 +54,16 @@ func TestUnitDismissalUpdatedBlockAndValidation(t *testing.T) {
 	if r.Code != 200 || calls != 1 || r.json["required_calc_version"] != 42.0 || r.json["time_zone"] != "Asia/Vladivostok" || r.json["blocks"].([]any)[0].(map[string]any)["help_text"] != "Методика" {
 		t.Fatal(r.Code, r.Body.String(), calls)
 	}
-	u.f.analyticsApply = func(*analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+	f.dismissRegularPayment = func(*statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
 		return nil, finerr.WithRequestRetryInfo(finerr.AnalyticsContextUnavailable(), false)
 	}
 	r = u.serve(t, "PUT", path+"?date=2026-09&transfer_mode=without", "", nil)
 	e := r.json["error"].(map[string]any)
 	if r.Code != 422 || e["retryable"] != false || !strings.Contains(e["user_message"].(string), "Изменение сохранено") {
 		t.Fatal(r.Code, r.Body.String())
+	}
+	f.dismissRegularPayment = func(in *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
+		return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42, Projection: dismissalProjection(in.Params)}, nil
 	}
 	for _, mutate := range []func(*analyticsv1.ApplyRegularPaymentDismissalResponse){
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.RequiredCalcVersion = 0 },
@@ -65,7 +73,9 @@ func TestUnitDismissalUpdatedBlockAndValidation(t *testing.T) {
 			r.Params.PeriodKey = "2026-08"
 		},
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.TimeZone = "bad/zone" },
+		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.TimeZone = "Europe/Moscow" },
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Currency = "" },
+		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Currency = "USD" },
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Currency = "rub" },
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Currency = "RUBX" },
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Currency = "РУБ" },

@@ -86,7 +86,7 @@ func TestUnitOperationRoutesAndProjection(t *testing.T) {
 		if in.RegularPaymentId != testKey {
 			t.Fatal(in)
 		}
-		return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 8}, nil
+		return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 8, Projection: dismissalProjection(in.Params)}, nil
 	}
 	f.restoreRegularPayment = func(in *statementdatav1.RestoreRegularPaymentRequest) (*statementdatav1.RestoreRegularPaymentResponse, error) {
 		if in.RegularPaymentId != testKey {

@@ -94,3 +94,6 @@ FIN-411: unit Rolling проверяет разбор двух новых тип
 ## FIN-416
 
 Unit: validation до assignment, полный ответ/контекст/target, обязательный блок, ошибка сохранённого изменения, calculation/sourcezone и историческийRFC3339. Независимый component integration поднимает HTTP и gRPC(bufconn) отдельно от полной сборки. API app.Run проверяет повтор после отказа composition, отсутствие скрытого повтораRPC,422, страницы, даты и identity; ответы проверяются OpenAPI. Старые сценарии обновлены под обязательные query/calculation/sourcezone. Три независимых coverage-гейта сохранены. UI не запускался.
+
+
+FIN-420: unit и HTTP→gRPC component проверяют передачу params в BSD и неизменённого MetricProjection в analytics, включая неизвестные protobuf-поля. Публичный API с настоящей JWT-проверкой отличает verified sub от подставленного X-User-Id/query user_id, отвергает чужой/несогласованный/пустой/слишком большой ответ BSD до Apply и сохраняет внешнее date/OUT_OF_RANGE400 против сохранённого422. Успех требует полного блока с теми же params, target, валютой и фактическим поясом. Post-commit отказ Apply не даёт200 и не вызывает скрытый повтор BSD. Транзакция, свежесть расчёта BSD, marker ACK и final false проверяются в owning-сервисах на PostgreSQL; transport fixtures BFF не объявляют эти свойства доказанными.

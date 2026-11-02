@@ -16,12 +16,15 @@ import (
 	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	assistantv1 "github.com/fin-assist/contracts/gen/go/finassist/assistant/v1"
 	userv1 "github.com/fin-assist/contracts/gen/go/finassist/user/v1"
+	"github.com/fin-assist/contracts/gen/go/finerr"
+	identity "github.com/fin-assist/go-identity"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/fin-assist/bank-bff/internal/apispec"
 	"github.com/fin-assist/bank-bff/internal/rest"
+	"github.com/fin-assist/bank-bff/internal/testpeer"
 )
 
 // fakeStream is a client stream that yields msgs then err (io.EOF when nil), or
@@ -183,6 +186,15 @@ const (
 	testKey   = "0190c3a0-1b2c-7d3e-8f40-123456789abc"
 )
 
+type unitUserChecker struct{}
+
+func (unitUserChecker) VerifyUser(_ context.Context, token string) (string, error) {
+	if token != "good" {
+		return "", finerr.InvalidToken()
+	}
+	return testpeer.UserID, nil
+}
+
 func newUnitAPI(t *testing.T, streams rest.StreamLimits) *unitAPI {
 	t.Helper()
 	spec, err := apispec.Load(context.Background())
@@ -201,17 +213,13 @@ func newUnitAPI(t *testing.T, streams rest.StreamLimits) *unitAPI {
 	sf := &statementFakes{}
 	of := &operationFakes{f: f}
 	deps := Deps{Auth: f, Consents: f, Profile: f, Assistant: f, Statements: sf, Analytics: f, Operations: of, Categories: of, RegularPayments: of, Heartbeat: time.Millisecond, AnswerStream: time.Second, PhoneStream: time.Second}
+	auth, err := identity.NewHTTP(unitUserChecker{}, func(w http.ResponseWriter, _ *http.Request, _ error) { rest.InvalidToken().Write(w) })
+	if err != nil {
+		t.Fatal(err)
+	}
 	h, err := rest.Handler(rest.Config{Spec: spec, BodyLimit: rest.MinBodyLimit, Metrics: metrics, Log: slog.New(slog.DiscardHandler), Clock: time.Now,
 		Streams: rest.NewStreamLimiter(streams), Uploads: rest.NewStreamLimiter(rest.StreamLimits{Max: 16, PerIP: 2, RetryAfter: time.Second}), Gates: rest.Gates{MinVersions: map[string]rest.Version{"android": {"0", "2", "5"}}, Clock: time.Now},
-		Authenticate: func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("Authorization") != goodToken {
-					rest.InvalidToken().Write(w)
-					return
-				}
-				next.ServeHTTP(w, r)
-			})
-		}}, deps.Routes())
+		Authenticate: auth.Middleware}, deps.Routes())
 	if err != nil {
 		t.Fatal(err)
 	}

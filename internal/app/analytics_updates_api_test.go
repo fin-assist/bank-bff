@@ -18,6 +18,10 @@ import (
 	"github.com/fin-assist/bank-bff/internal/testpeer"
 )
 
+func dismissalAPIProjection(params *commonv1.AnalyticsParams) *analyticsv1.MetricProjection {
+	return testpeer.DismissalProjection(params, testpeer.UserID)
+}
+
 func dismissalAPIResponse(in *analyticsv1.ApplyRegularPaymentDismissalRequest) *analyticsv1.ApplyRegularPaymentDismissalResponse {
 	return &analyticsv1.ApplyRegularPaymentDismissalResponse{Params: in.Params, TimeZone: "Asia/Vladivostok", Currency: "RUB", RequiredCalcVersion: in.CalcVersion,
 		Blocks: []*commonv1.Block{{Id: "regular_payments", Type: "insight_card", V: 1, Status: "none", EmptyText: proto.String("Регулярных платежей не нашли"), AltText: proto.String("Регулярных платежей не нашли"), HelpText: proto.String("Методика")}}}
@@ -25,24 +29,24 @@ func dismissalAPIResponse(in *analyticsv1.ApplyRegularPaymentDismissalRequest) *
 
 func TestAPIUpdatedDismissalComposesAfterCommitAndRetries(t *testing.T) {
 	b := startBFF(t, nil)
-	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1"), "X-User-Id": "foreign"})
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access(testpeer.UserID), "X-User-Id": "foreign"})
 	path := "/v1/analytics/regular-payments/" + idemKey + "/dismissal"
 	var writes, applies atomic.Int32
 	b.peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
 		p.DismissRegularPaymentFunc = func(ctx context.Context, r *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
 			profileDeadline(t, ctx)
 			writes.Add(1)
-			if r.RegularPaymentId != idemKey {
+			if r.RegularPaymentId != idemKey || r.GetParams().GetPeriodKey() != "2026-09" || r.GetParams().GetTransferMode() != commonv1.TransferMode_TRANSFER_MODE_WITHOUT {
 				t.Error(r)
 			}
-			return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42}, nil
+			return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42, Projection: dismissalAPIProjection(r.Params)}, nil
 		}
 	})
 	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
 		a.ApplyFunc = func(ctx context.Context, r *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
 			profileDeadline(t, ctx)
 			applies.Add(1)
-			if writes.Load() == 0 || r.CalcVersion != 42 || r.Params.GetPeriodKey() != "2026-09" || r.Params.GetTransferMode() != commonv1.TransferMode_TRANSFER_MODE_WITHOUT {
+			if writes.Load() == 0 || r.CalcVersion != 42 || r.Params.GetPeriodKey() != "2026-09" || r.Params.GetTransferMode() != commonv1.TransferMode_TRANSFER_MODE_WITHOUT || !proto.Equal(r.Projection, dismissalAPIProjection(r.Params)) {
 				t.Error(r)
 			}
 			if applies.Load() == 1 {
@@ -66,8 +70,8 @@ func TestAPIUpdatedDismissalComposesAfterCommitAndRetries(t *testing.T) {
 	if r.StatusCode != 200 || r.json["required_calc_version"] != 42.0 || r.json["time_zone"] != "Asia/Vladivostok" || r.json["blocks"].([]any)[0].(map[string]any)["status"] != "none" || writes.Load() != 2 || applies.Load() != 2 {
 		t.Fatal(r.StatusCode, string(r.body))
 	}
-	b.peers.Analytics.Set(func(a *testpeer.Analytics) {
-		a.ApplyFunc = func(context.Context, *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+	b.peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
+		p.DismissRegularPaymentFunc = func(context.Context, *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
 			return nil, finerr.WithRequestRetryInfo(finerr.AnalyticsContextUnavailable(), false)
 		}
 	})
@@ -82,7 +86,7 @@ func TestAPIUpdatedDismissalComposesAfterCommitAndRetries(t *testing.T) {
 
 func TestAPIChartPageAndImportDatesUseVerifiedUserAndSourceZone(t *testing.T) {
 	b := startBFF(t, nil)
-	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access(testpeer.UserID)})
 	data, err := structpb.NewStruct(map[string]any{"kind": "bar", "value_kind": "amount", "points": []any{map[string]any{"range": map[string]any{"from": "2026-09-01T00:00:00+03:00", "to": "2026-10-01T00:00:00+03:00"}, "value": 0, "coverage": "complete", "action": map[string]any{"type": "select_analytics_period", "period": "month", "date": "2026-09"}}}, "page": map[string]any{"revision": "r1", "previous": "opaque-next"}})
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +140,7 @@ func TestAPIChartPageAndImportDatesUseVerifiedUserAndSourceZone(t *testing.T) {
 
 func TestAPIChartPageErrorsAndValidation(t *testing.T) {
 	b := startBFF(t, nil)
-	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access(testpeer.UserID)})
 	path := "/v1/analytics/charts/monthly_chart"
 	requestPage := request{method: "GET", path: path + "?cursor=opaque", route: path, header: auth}
 	failures := registry(finerr.InvalidToken(), finerr.TokenRevoked(), finerr.RateLimited(retryAt()), finerr.ValidationError(&errdetails.BadRequest_FieldViolation{Field: "cursor", Reason: "OUT_OF_RANGE", Description: "SECRET_CURSOR"}), finerr.InternalError())
@@ -191,7 +195,7 @@ func TestAPIChartPageErrorsAndValidation(t *testing.T) {
 		}
 	}
 	maintenance := startBFF(t, func(c *config.Config, _ *testpeer.Peers) { c.API.Maintenance.Enabled = true })
-	requestPage.header = base(map[string]string{"Authorization": "Bearer " + maintenance.keys.Access("u1")})
+	requestPage.header = base(map[string]string{"Authorization": "Bearer " + maintenance.keys.Access(testpeer.UserID)})
 	if r := maintenance.do(t, requestPage); r.StatusCode != 503 || len(maintenance.peers.Calls(analyticsv1.AnalyticsService_GetChartPage_FullMethodName)) != 0 {
 		t.Fatal(r.StatusCode, string(r.body))
 	}
@@ -199,7 +203,7 @@ func TestAPIChartPageErrorsAndValidation(t *testing.T) {
 
 func TestAPIInvalidAnalyticsEnvelopesAreNotSuccessful(t *testing.T) {
 	b := startBFF(t, nil)
-	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access(testpeer.UserID)})
 	for _, block := range []*commonv1.Block{
 		{Id: "monthly_chart", Type: "chart", V: 1, Status: "ready"},
 		{Id: "monthly_chart", Type: "chart", V: 1, Data: &structpb.Struct{}},
@@ -215,10 +219,10 @@ func TestAPIInvalidAnalyticsEnvelopesAreNotSuccessful(t *testing.T) {
 			t.Fatal(r.StatusCode, string(r.body))
 		}
 	}
-	for _, currency := range []string{"rub", "RUBX", "РУБ"} {
+	for _, currency := range []string{"rub", "RUBX", "РУБ", "USD"} {
 		b.peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
-			p.DismissRegularPaymentFunc = func(context.Context, *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
-				return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42}, nil
+			p.DismissRegularPaymentFunc = func(_ context.Context, r *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
+				return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42, Projection: dismissalAPIProjection(r.Params)}, nil
 			}
 		})
 		b.peers.Analytics.Set(func(a *testpeer.Analytics) {

@@ -9,6 +9,7 @@ import (
 	analyticsv1 "github.com/fin-assist/contracts/gen/go/finassist/analytics/v1"
 	commonv1 "github.com/fin-assist/contracts/gen/go/finassist/common/v1"
 	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/fin-assist/bank-bff/internal/rest"
 )
@@ -92,17 +93,27 @@ type analyticsBlockUpdate struct {
 
 var analyticsCurrency = regexp.MustCompile(`^[A-Z]{3}$`)
 
-func (d Deps) applyDismissal(c *rest.Call, params *commonv1.AnalyticsParams, target int32) {
+// validDismissalProjection binds a source response to this authenticated command.
+// Metric contents belong to BSD and analytics; the BFF never interprets financial details.
+func validDismissalProjection(p *analyticsv1.MetricProjection, params *commonv1.AnalyticsParams, userID string) bool {
+	source := p.GetParams()
+	return p != nil && p.GetUserId() == userID && source != nil &&
+		source.GetPeriod() == params.GetPeriod() && source.GetPeriodKey() == params.GetPeriodKey() &&
+		source.GetTransferMode() == params.GetTransferMode() && proto.Size(p) <= 3<<20
+}
+
+func (d Deps) applyDismissal(c *rest.Call, params *commonv1.AnalyticsParams, target int32, projection *analyticsv1.MetricProjection) {
 	ctx, cancel := unary(c)
 	defer cancel()
 	resp, err := d.Analytics.ApplyRegularPaymentDismissal(ctx, &analyticsv1.ApplyRegularPaymentDismissalRequest{
-		RegularPaymentId: c.R.PathValue("id"), CalcVersion: target, Params: params,
+		RegularPaymentId: c.R.PathValue("id"), CalcVersion: target, Params: params, Projection: projection,
 	})
 	if err != nil {
 		c.Fail(err)
 		return
 	}
-	if resp.GetRequiredCalcVersion() != target || !validSourceZone(resp.GetTimeZone(), true) || !analyticsCurrency.MatchString(resp.GetCurrency()) || resp.GetParams() == nil ||
+	if resp.GetRequiredCalcVersion() != target || resp.GetTimeZone() != projection.GetTimeZone() || resp.GetCurrency() != projection.GetCurrency() ||
+		!validSourceZone(resp.GetTimeZone(), true) || !analyticsCurrency.MatchString(resp.GetCurrency()) || resp.GetParams() == nil ||
 		resp.GetParams().GetPeriod() != params.GetPeriod() || resp.GetParams().GetPeriodKey() != params.GetPeriodKey() || resp.GetParams().GetTransferMode() != params.GetTransferMode() ||
 		len(resp.GetBlocks()) < 1 || len(resp.GetBlocks()) > 16 {
 		c.Refuse(rest.Internal(), true)
