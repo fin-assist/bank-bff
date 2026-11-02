@@ -71,8 +71,15 @@ FIN-364: all four StartPhoneVerification REST fields are structurally required; 
 
 - **Repeated literals (FIN-421):** all literals used in multiple places must be constants. If a literal is
   used across layers, place its constant at the domain level; if used only within one layer, place it at that
-  layer. Follow the existing domain/model ownership and dependency direction; do not create a generic constants
-  package or an empty domain layer just for this rule. Generated output is changed through its source.
+  layer. This owner rule includes technical values; it is not an exception for config or transport. Domain-level
+  constants carry values only and must not import outer-layer behavior. In layered services the domain level is
+  `internal/domain`; in a flat library it is the library's model/contract package. If no domain package exists,
+  introduce only the concrete value's domain owner when an actual cross-layer use requires it, not an empty
+  layer in a documentation PR. Different meanings get separate named constants even when their values coincide.
+  Tests keep independent expected constants derived from the contract, not aliases of the production constant,
+  so an accidental production-value change still fails. Generated output is changed through its source.
+  Review applies this rule to new/changed code; this instruction-only PR does not refactor unrelated existing
+  literals or claim that the existing codebase already satisfies the rule.
 
 ## SQL construction in Go
 
@@ -174,7 +181,8 @@ Preserve agreed correctness and security guarantees when simplifying.
 
 Check repeated literals and the layer owning each constant: reuse across layers belongs at the domain level;
 reuse within one layer belongs in that layer. Check the uses and imports, not just the declaration name.
-For libraries, the domain level is the existing library model/contract package, not a forced directory name.
+Use the domain definition and independent test expectations in Writing code / Writing Go code above.
+Do not merge constants of different meanings merely because the values match, or demand unrelated legacy cleanup.
 
 ### Existing mandatory review passes
 
