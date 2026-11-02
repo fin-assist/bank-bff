@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"net/http"
+	"regexp"
 	"time"
 	"unicode/utf8"
 
@@ -89,6 +90,8 @@ type analyticsBlockUpdate struct {
 	RequiredCalcVersion int32            `json:"required_calc_version"`
 }
 
+var analyticsCurrency = regexp.MustCompile(`^[A-Z]{3}$`)
+
 func (d Deps) applyDismissal(c *rest.Call, params *commonv1.AnalyticsParams, target int32) {
 	ctx, cancel := unary(c)
 	defer cancel()
@@ -99,7 +102,7 @@ func (d Deps) applyDismissal(c *rest.Call, params *commonv1.AnalyticsParams, tar
 		c.Fail(err)
 		return
 	}
-	if resp.GetRequiredCalcVersion() != target || !validSourceZone(resp.GetTimeZone(), true) || resp.GetCurrency() == "" || resp.GetParams() == nil ||
+	if resp.GetRequiredCalcVersion() != target || !validSourceZone(resp.GetTimeZone(), true) || !analyticsCurrency.MatchString(resp.GetCurrency()) || resp.GetParams() == nil ||
 		resp.GetParams().GetPeriod() != params.GetPeriod() || resp.GetParams().GetPeriodKey() != params.GetPeriodKey() || resp.GetParams().GetTransferMode() != params.GetTransferMode() ||
 		len(resp.GetBlocks()) < 1 || len(resp.GetBlocks()) > 16 {
 		c.Refuse(rest.Internal(), true)
@@ -130,7 +133,7 @@ func (d Deps) analyticsChartPage(c *rest.Call) {
 		rest.Validation(rest.Detail{Field: "cursor", Code: rest.DetailRequired, Message: "is required"}).Write(c.W)
 		return
 	}
-	if len(q["cursor"]) != 1 || utf8.RuneCountInString(q.Get("cursor")) > 2048 {
+	if len(q["cursor"]) != 1 || !utf8.ValidString(q.Get("cursor")) || utf8.RuneCountInString(q.Get("cursor")) > 2048 {
 		queryInvalid(c, "cursor")
 		return
 	}
@@ -142,7 +145,7 @@ func (d Deps) analyticsChartPage(c *rest.Call) {
 		return
 	}
 	b := resp.GetBlock()
-	if !validSourceZone(resp.GetTimeZone(), true) || b == nil || b.GetId() != "monthly_chart" || b.GetType() != "chart" || b.GetV() != 1 {
+	if !validSourceZone(resp.GetTimeZone(), true) || b == nil || b.GetId() != "monthly_chart" || b.GetType() != "chart" || b.GetV() != 1 || b.GetStatus() != "ready" || b.GetData() == nil {
 		rest.Internal().Write(c.W)
 		return
 	}

@@ -120,6 +120,18 @@ func TestAPIChartPageAndImportDatesUseVerifiedUserAndSourceZone(t *testing.T) {
 	if r.StatusCode != 200 || r.json["time_zone"] != "Asia/Novosibirsk" {
 		t.Fatal(r.StatusCode, string(r.body))
 	}
+	before := len(b.peers.Calls(statementdatav1.StatementsService_GetImportConfig_FullMethodName))
+	for _, field := range []string{"period_from", "period_to"} {
+		req.path = "/v1/statements/config?" + field + "=2026-01-010"
+		r = b.do(t, req)
+		if r.StatusCode != 400 || len(b.peers.Calls(statementdatav1.StatementsService_GetImportConfig_FullMethodName)) != before {
+			t.Fatal(r.StatusCode, string(r.body))
+		}
+		details := r.json["error"].(map[string]any)["details"].([]any)
+		if len(details) != 1 || details[0].(map[string]any)["field"] != field || details[0].(map[string]any)["code"] != "INVALID_FORMAT" {
+			t.Fatal(details)
+		}
+	}
 }
 
 func TestAPIChartPageErrorsAndValidation(t *testing.T) {
@@ -143,12 +155,31 @@ func TestAPIChartPageErrorsAndValidation(t *testing.T) {
 		}
 	}
 	before := len(b.peers.Calls(analyticsv1.AnalyticsService_GetChartPage_FullMethodName))
-	for _, q := range []string{"", "?cursor=", "?cursor=a&cursor=b", "?cursor=" + strings.Repeat("x", 2049), "?cursor=opaque&cursor=bad;hidden"} {
+	for _, tc := range []struct{ query, field, code string }{
+		{"", "cursor", "REQUIRED"},
+		{"?cursor=", "cursor", "REQUIRED"},
+		{"?cursor=a&cursor=b", "cursor", "INVALID_FORMAT"},
+		{"?cursor=" + strings.Repeat("x", 2049), "cursor", "INVALID_FORMAT"},
+		{"?cursor=%FF", "cursor", "INVALID_FORMAT"},
+		{"?cursor=opaque&transfer_mode=without", "transfer_mode", "INVALID_FORMAT"},
+		{"?cursor=opaque&page_size=60", "page_size", "INVALID_FORMAT"},
+		{"?cursor=opaque&X-Read-Primary=1", "X-Read-Primary", "INVALID_FORMAT"},
+		{"?cursor=opaque&cursor=bad;hidden", "", "INVALID_FORMAT"},
+	} {
 		r := requestPage
-		r.path = path + q
+		r.path = path + tc.query
 		got := b.do(t, r)
 		if got.StatusCode != 400 || len(b.peers.Calls(analyticsv1.AnalyticsService_GetChartPage_FullMethodName)) != before {
 			t.Fatal(got.StatusCode, string(got.body))
+		}
+		details := got.json["error"].(map[string]any)["details"].([]any)
+		if len(details) != 1 {
+			t.Fatal(details)
+		}
+		detail := details[0].(map[string]any)
+		field, _ := detail["field"].(string)
+		if field != tc.field || detail["code"] != tc.code {
+			t.Fatal(details)
 		}
 	}
 	for _, headers := range []map[string]string{base(nil), base(map[string]string{"Authorization": "Bearer forged"}), base(map[string]string{"Authorization": auth["Authorization"], "X-Client-Version": "android/0.0.1"})} {
@@ -163,5 +194,47 @@ func TestAPIChartPageErrorsAndValidation(t *testing.T) {
 	requestPage.header = base(map[string]string{"Authorization": "Bearer " + maintenance.keys.Access("u1")})
 	if r := maintenance.do(t, requestPage); r.StatusCode != 503 || len(maintenance.peers.Calls(analyticsv1.AnalyticsService_GetChartPage_FullMethodName)) != 0 {
 		t.Fatal(r.StatusCode, string(r.body))
+	}
+}
+
+func TestAPIInvalidAnalyticsEnvelopesAreNotSuccessful(t *testing.T) {
+	b := startBFF(t, nil)
+	auth := base(map[string]string{"Authorization": "Bearer " + b.keys.Access("u1")})
+	for _, block := range []*commonv1.Block{
+		{Id: "monthly_chart", Type: "chart", V: 1, Status: "ready"},
+		{Id: "monthly_chart", Type: "chart", V: 1, Data: &structpb.Struct{}},
+		{Id: "monthly_chart", Type: "chart", V: 1, Status: "none", Data: &structpb.Struct{}},
+	} {
+		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.PageFunc = func(context.Context, *analyticsv1.GetChartPageRequest) (*analyticsv1.GetChartPageResponse, error) {
+				return &analyticsv1.GetChartPageResponse{TimeZone: "Europe/Moscow", Block: block}, nil
+			}
+		})
+		r := b.do(t, request{method: "GET", path: "/v1/analytics/charts/monthly_chart?cursor=opaque", route: "/v1/analytics/charts/monthly_chart", header: auth})
+		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" {
+			t.Fatal(r.StatusCode, string(r.body))
+		}
+	}
+	for _, currency := range []string{"rub", "RUBX", "РУБ"} {
+		b.peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
+			p.DismissRegularPaymentFunc = func(context.Context, *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
+				return &statementdatav1.DismissRegularPaymentResponse{CalcVersion: 42}, nil
+			}
+		})
+		b.peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.ApplyFunc = func(_ context.Context, r *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+				out := dismissalAPIResponse(r)
+				out.Currency = currency
+				return out, nil
+			}
+		})
+		beforeWrites := len(b.peers.Calls(statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName))
+		beforeApplies := len(b.peers.Calls(analyticsv1.AnalyticsService_ApplyRegularPaymentDismissal_FullMethodName))
+		r := b.do(t, request{method: "PUT", path: "/v1/analytics/regular-payments/" + idemKey + "/dismissal?date=2026-09&transfer_mode=without", route: "/v1/analytics/regular-payments/{id}/dismissal", header: auth})
+		if r.StatusCode != 500 || errorCode(r) != "INTERNAL_ERROR" || r.json["error"].(map[string]any)["retryable"] != true ||
+			len(b.peers.Calls(statementdatav1.RegularPaymentsService_DismissRegularPayment_FullMethodName)) != beforeWrites+1 ||
+			len(b.peers.Calls(analyticsv1.AnalyticsService_ApplyRegularPaymentDismissal_FullMethodName)) != beforeApplies+1 {
+			t.Fatal(r.StatusCode, string(r.body))
+		}
 	}
 }

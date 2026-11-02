@@ -42,7 +42,7 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps := Deps{Analytics: analyticsv1.NewAnalyticsServiceClient(conn), RegularPayments: statementdatav1.NewRegularPaymentsServiceClient(conn), Statements: statementdatav1.NewStatementsServiceClient(conn)}
-	var writes atomic.Int32
+	var writes, pages, configs atomic.Int32
 	peers.RegularPayments.Set(func(p *testpeer.RegularPayments) {
 		p.DismissRegularPaymentFunc = func(_ context.Context, r *statementdatav1.DismissRegularPaymentRequest) (*statementdatav1.DismissRegularPaymentResponse, error) {
 			if r.RegularPaymentId != testKey {
@@ -60,15 +60,17 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 			return dismissalResponse(r), nil
 		}
 		a.PageFunc = func(_ context.Context, r *analyticsv1.GetChartPageRequest) (*analyticsv1.GetChartPageResponse, error) {
+			pages.Add(1)
 			if r.Cursor != "opaque" {
 				t.Error(r)
 			}
 			data, _ := structpb.NewStruct(map[string]any{"page": map[string]any{"revision": "v1"}, "future": true})
-			return &analyticsv1.GetChartPageResponse{TimeZone: "Asia/Vladivostok", Block: &commonv1.Block{Id: "monthly_chart", Type: "chart", V: 1, Data: data}}, nil
+			return &analyticsv1.GetChartPageResponse{TimeZone: "Asia/Vladivostok", Block: &commonv1.Block{Id: "monthly_chart", Type: "chart", V: 1, Status: "ready", Data: data}}, nil
 		}
 	})
 	peers.Statements.Set(func(s *testpeer.Statements) {
 		s.ConfigFunc = func(_ context.Context, r *statementdatav1.GetImportConfigRequest) (*statementdatav1.GetImportConfigResponse, error) {
+			configs.Add(1)
 			if r.GetPeriodFrom() != "1900-01-01" || r.GetPeriodTo() != "1900-01-02" {
 				t.Error(r)
 			}
@@ -85,6 +87,10 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 			t.Fatal(e)
 		}
 		mux.HandleFunc(route.method+" "+route.path, func(w http.ResponseWriter, r *http.Request) {
+			if details := rest.Validate(r.Context(), r, op, map[string]string{"id": r.PathValue("id")}, nil); len(details) > 0 {
+				rest.Validation(details...).Write(w)
+				return
+			}
 			route.handle(&rest.Call{W: w, R: r, Metrics: metrics, Log: slog.New(slog.DiscardHandler), Op: op})
 		})
 	}
@@ -97,6 +103,7 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
+		req.Header.Set("X-Client-Version", "android/0.2.16+1")
 		r, e := client.Do(req)
 		if e != nil {
 			t.Fatal(e)
@@ -136,6 +143,47 @@ func TestIntegrationUpdatedAnalyticsEndpoints(t *testing.T) {
 	}
 	code, out = call("GET", "/v1/statements/config?period_from=1900-01-01&period_to=1900-01-02")
 	if code != 200 || out["time_zone"] != "Europe/Moscow" {
+		t.Fatal(code, out)
+	}
+	for _, tc := range []struct{ path, field string }{
+		{"/v1/analytics/charts/monthly_chart?cursor=opaque&period=year", "period"},
+		{"/v1/analytics/charts/monthly_chart?cursor=" + strings.Repeat("x", 2049), "cursor"},
+		{"/v1/analytics/charts/monthly_chart?cursor=%FF", "cursor"},
+		{"/v1/statements/config?period_from=2026-01-010&period_to=2026-02-01", "period_from"},
+		{"/v1/statements/config?period_from=2026-01-01&period_to=2026-02-010", "period_to"},
+	} {
+		code, out = call("GET", tc.path)
+		if code != 400 || pages.Load() != 1 || configs.Load() != 1 {
+			t.Fatal(code, out, pages.Load(), configs.Load())
+		}
+		details := out["error"].(map[string]any)["details"].([]any)
+		if len(details) != 1 || details[0].(map[string]any)["field"] != tc.field || details[0].(map[string]any)["code"] != "INVALID_FORMAT" {
+			t.Fatal(details)
+		}
+	}
+	for _, block := range []*commonv1.Block{
+		{Id: "monthly_chart", Type: "chart", V: 1, Status: "ready"},
+		{Id: "monthly_chart", Type: "chart", V: 1, Status: "none", Data: &structpb.Struct{}},
+	} {
+		peers.Analytics.Set(func(a *testpeer.Analytics) {
+			a.PageFunc = func(context.Context, *analyticsv1.GetChartPageRequest) (*analyticsv1.GetChartPageResponse, error) {
+				return &analyticsv1.GetChartPageResponse{TimeZone: "Europe/Moscow", Block: block}, nil
+			}
+		})
+		code, out = call("GET", "/v1/analytics/charts/monthly_chart?cursor=opaque")
+		if code != 500 || out["error"].(map[string]any)["code"] != "INTERNAL_ERROR" {
+			t.Fatal(code, out)
+		}
+	}
+	peers.Analytics.Set(func(a *testpeer.Analytics) {
+		a.ApplyFunc = func(_ context.Context, r *analyticsv1.ApplyRegularPaymentDismissalRequest) (*analyticsv1.ApplyRegularPaymentDismissalResponse, error) {
+			out := dismissalResponse(r)
+			out.Currency = "rub"
+			return out, nil
+		}
+	})
+	code, out = call("PUT", path+"?date=2026-09&transfer_mode=with")
+	if code != 500 || out["error"].(map[string]any)["code"] != "INTERNAL_ERROR" {
 		t.Fatal(code, out)
 	}
 }

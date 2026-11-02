@@ -10,6 +10,7 @@ import (
 	statementdatav1 "github.com/fin-assist/contracts/gen/go/finassist/statementdata/v1"
 	"github.com/fin-assist/contracts/gen/go/finerr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/fin-assist/bank-bff/internal/rest"
@@ -65,6 +66,9 @@ func TestUnitDismissalUpdatedBlockAndValidation(t *testing.T) {
 		},
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.TimeZone = "bad/zone" },
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Currency = "" },
+		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Currency = "rub" },
+		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Currency = "RUBX" },
+		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Currency = "РУБ" },
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Blocks = nil },
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Blocks = append(r.Blocks, r.Blocks[0]) },
 		func(r *analyticsv1.ApplyRegularPaymentDismissalResponse) { r.Blocks[0].Id = "other" },
@@ -89,7 +93,7 @@ func TestUnitChartPagePassThroughAndErrors(t *testing.T) {
 		if in.Cursor != "opaque" {
 			t.Fatal(in)
 		}
-		return &analyticsv1.GetChartPageResponse{TimeZone: "Europe/Moscow", Block: &commonv1.Block{Id: "monthly_chart", Type: "chart", V: 1, HelpText: proto.String("Подсказка")}}, nil
+		return &analyticsv1.GetChartPageResponse{TimeZone: "Europe/Moscow", Block: &commonv1.Block{Id: "monthly_chart", Type: "chart", V: 1, Status: "ready", Data: &structpb.Struct{}, HelpText: proto.String("Подсказка")}}, nil
 	}
 	path := "/v1/analytics/charts/monthly_chart"
 	for _, q := range []string{"", "?cursor=", "?cursor=a&cursor=b", "?cursor=" + strings.Repeat("x", 2049)} {
@@ -113,6 +117,18 @@ func TestUnitChartPagePassThroughAndErrors(t *testing.T) {
 	}
 	if r = u.serve(t, "GET", path+"?cursor=opaque", "", nil); r.Code != 500 {
 		t.Fatal(r.Code, r.Body.String())
+	}
+	for _, block := range []*commonv1.Block{
+		{Id: "monthly_chart", Type: "chart", V: 1, Status: "ready"},
+		{Id: "monthly_chart", Type: "chart", V: 1, Data: &structpb.Struct{}},
+		{Id: "monthly_chart", Type: "chart", V: 1, Status: "none", Data: &structpb.Struct{}},
+	} {
+		u.f.analyticsPage = func(*analyticsv1.GetChartPageRequest) (*analyticsv1.GetChartPageResponse, error) {
+			return &analyticsv1.GetChartPageResponse{TimeZone: "Europe/Moscow", Block: block}, nil
+		}
+		if r = u.serve(t, "GET", path+"?cursor=opaque", "", nil); r.Code != 500 || r.json["error"].(map[string]any)["code"] != "INTERNAL_ERROR" {
+			t.Fatal(r.Code, r.Body.String())
+		}
 	}
 }
 

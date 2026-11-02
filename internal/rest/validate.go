@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -235,8 +236,8 @@ func StreamingInput(r *http.Request, op apispec.Operation, path map[string]strin
 	return nil, dedupe(details), nil
 }
 
-// exactCalendarQuery preserves FIN-418's distinction between a missing field and
-// an explicitly empty or repeated scalar, before OpenAPI chooses the first value.
+// exactCalendarQuery applies FIN-418's query-specific error codes before generic
+// schema validation can select a duplicate value or classify length as a range.
 func exactCalendarQuery(r *http.Request, op apispec.Operation) []Detail {
 	var fields []string
 	switch op.Route.Operation.OperationID {
@@ -254,6 +255,13 @@ func exactCalendarQuery(r *http.Request, op apispec.Operation) []Detail {
 		return []Detail{{Code: DetailInvalidFormat, Message: detailMessage(DetailInvalidFormat)}}
 	}
 	var out []Detail
+	if op.Route.Operation.OperationID == "getAnalyticsChartPage" {
+		for field := range q {
+			if field != "cursor" {
+				out = append(out, Detail{Field: field, Code: DetailInvalidFormat, Message: detailMessage(DetailInvalidFormat)})
+			}
+		}
+	}
 	for _, field := range fields {
 		values, exists := q[field]
 		if !exists {
@@ -264,9 +272,18 @@ func exactCalendarQuery(r *http.Request, op apispec.Operation) []Detail {
 		if field == "cursor" && len(values) == 1 && values[0] == "" {
 			code = DetailRequired
 		}
+		if !invalid {
+			switch field {
+			case "cursor":
+				invalid = !utf8.ValidString(values[0]) || utf8.RuneCountInString(values[0]) > 2048
+			case "period_from", "period_to":
+				day, parseErr := time.Parse("2006-01-02", values[0])
+				invalid = parseErr != nil || day.Year() < 1 || day.Format("2006-01-02") != values[0]
+			}
+		}
 		if invalid {
 			out = append(out, Detail{Field: field, Code: code, Message: detailMessage(code)})
 		}
 	}
-	return out
+	return dedupe(out)
 }
