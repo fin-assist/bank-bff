@@ -122,7 +122,7 @@ Before review, make separate Security and Tests passes. Request in Russian:
 
 @codex @claude проведите ревью этого PR по Code Review Rules в AGENTS.md, включая Security и Tests.
   Перед содержательной проверкой выберите минимальный набор навыков из docs/review-skills/README.md,
-  прочитайте соответствующие SKILL.md проверяемой ревизии и примените их процедуры. В сводке укажите названия
+  прочитайте выбранные файлы SKILL.md из текущего коммита PR и примените подходящие к изменению проверки. В сводке укажите названия
   применённых навыков, если применяли их; отсутствие навыка не отменяет обязательных проходов.
 Замечания — на русском, inline на изменённых строках. Особое внимание: <риски изменения>.
 
@@ -137,7 +137,7 @@ Tags are created only by the owner; release publication, image publication and d
 
 Before substantive review, map the diff to its domains and read the smallest sufficient set of available
 existing skills listed in [docs/review-skills/README.md](docs/review-skills/README.md). Read the selected
-`SKILL.md` files from the revision under review and follow their applicable procedures; naming a skill without
+`SKILL.md` files from the current PR commit and apply checks relevant to the change; naming a skill without
 reading it is not using it. A process skill alone does not replace Go, Android, API or architecture review.
 For a multi-domain change select each relevant skill, not the whole catalog by default.
 When the diff changes AGENTS.md, CLAUDE.md or review skills, also read and apply the mandatory passes of the base
