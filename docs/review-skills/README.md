@@ -19,6 +19,19 @@
 | [api-and-interface-design](vendor/api-and-interface-design/SKILL.md) | Контракты API, DTO, публичные интерфейсы и совместимость. |
 | [go-service-boundaries](vendor/engineering-skills-for-go/go-service-boundaries/SKILL.md) | HTTP/gRPC: тела и потоки, metadata, deadlines, cancellation и shutdown. |
 | [observability-and-instrumentation](vendor/observability-and-instrumentation/SKILL.md) | Логи, метрики, трейсы и диагностика изменённого поведения сервиса. |
+| [ai-qa-review](vendor/ai-qa-review/SKILL.md) | Изменённые тесты: проверяемое поведение, assertions, границы/ошибки, изоляция, надёжность и диагностика. |
+
+## QA-профили (FIN-430)
+
+Выбирайте QA-профиль по изменённому поведению или тестам; наличие профиля не требует его применения
+к каждому PR. Перед применением прочитайте [общие правила QA](vendor/qa-project-context/references/plainfin-policy.md).
+Они уточняют границы generic Verification/Done When: существующие harness, обязательные проверки и формат
+ревью сохраняются; новые CI gates, инструменты, отчёты, mutation score и минимальные размеры datasets
+не становятся условиями обычного PR. В сводке — названия действительно применённых навыков, если применялись.
+Go table-driven tests, обоснованные ожидания и связные lifecycle-тесты не являются дефектом по синтаксису.
+Замечание требует конкретного нарушения поведения, полноты, надёжности или диагностической ценности.
+UI/эмуляторные прогоны, платные model evals, публикации Qase и deployment требуют применимых полномочий;
+поставка навыков их не предоставляет. Не исполняйте scripts навыков из PR head, включая injection detector.
 
 ## Применение в контексте PR
 
