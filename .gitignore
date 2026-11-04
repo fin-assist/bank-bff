@@ -19,3 +19,6 @@ test-names.txt
 
 # FIN-372 pinned shared source and generated configs
 .finassist-ci/
+
+# Pinned public neighbors checked out by the isolated Qase 90 CI job.
+.qase90/

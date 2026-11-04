@@ -1,0 +1,51 @@
+name: Qase 90 cross-service
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  qase90:
+    name: Qase 90 cross-service
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: qase90-local-test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 12
+    env:
+      GOPRIVATE: github.com/fin-assist/*
+      TEST_DATABASE_URL: postgres://postgres:qase90-local-test@127.0.0.1:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      # Both neighbors are public. The default read-only GITHUB_TOKEN suffices;
+      # this job receives no repository/module secret, including on fork PRs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: fin-assist/bank-statement-data
+          ref: f6d7c9a5e6ef62c6e97797f6899aec574b8f6ea1
+          path: .qase90/bsd
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: fin-assist/analytics
+          ref: e00c6114d011f33576355dee19ecd77e1e7c4e1b
+          path: .qase90/analytics
+          persist-credentials: false
+      - name: Real PostgreSQL, signed gRPC, HTTP and outbox lifecycle
+        run: python3 scripts/qase90.py --bsd .qase90/bsd --analytics .qase90/analytics
+
