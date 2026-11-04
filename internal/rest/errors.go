@@ -108,12 +108,18 @@ func (e Error) Write(w http.ResponseWriter) {
 	}})
 }
 
-// WriteJSON sends a success body.
+// WriteJSON encodes before committing success, so invalid service data cannot
+// produce a successful status with an empty or partial JSON body.
 func WriteJSON(w http.ResponseWriter, status int, body any) {
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		Internal().Write(w)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	_, _ = w.Write(append(encoded, '\n'))
 }
 
 // WriteNoContent sends 204.

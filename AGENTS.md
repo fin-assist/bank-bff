@@ -49,6 +49,8 @@ Rollout/rollback prerequisites are in docs/config.md; import routes use STATEMEN
 
 FIN-364: all four StartPhoneVerification REST fields are structurally required; copy consent/version/age assertions exactly to RPC. False booleans and outdated nonempty versions are USER policy after key/rate-limit gates, never local true checks before RPC. Receipt timestamps, account binding and provider calls are USER-owned. Only the existing trusted-proxy-derived x-client-ip is receipt metadata; never forward arbitrary HTTP X-Client-IP, client clocks or user agent. Register passes its original receipt assertions without fetching the current document. No hidden Start RPC retry or BFF receipt cache; all POST retryable remains conservatively false without proof of the key window.
 
+FIN-431/FIN-432: an assistant chart point without bounds retains its value/range with partial coverage and absent data dates. Non-finite typed chart/rows numbers use the existing unsupported block with alt_text at the same index, including history, snapshots and block events. Opaque analytics Struct data is unchanged. Encode ordinary JSON before committing success; encoding failures return generic INTERNAL_ERROR with retryable=false, never raw data or an empty 2xx body. Transport write failures after commit cannot be rewritten.
+
 ## Security
 
 - Keep operational endpoints on their own private listener; never attach metrics, readiness or

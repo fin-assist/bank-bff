@@ -1,6 +1,7 @@
 package endpoint
 
 import (
+	"math"
 	"strings"
 	"time"
 
@@ -77,7 +78,9 @@ func (c converter) block(b *assistantv1.Block) Block {
 			return out
 		}
 	case *assistantv1.Block_Rows:
-		return Block{Type: "rows", V: 1, AltText: b.AltText, Data: c.rows(content.Rows)}
+		if data, ok := c.rows(content.Rows); ok {
+			return Block{Type: "rows", V: 1, AltText: b.AltText, Data: data}
+		}
 	}
 	c.metrics.Untranslated("Block", "content")
 	return Block{Type: unsupportedBlock, V: 1, AltText: b.AltText}
@@ -95,18 +98,21 @@ func (c converter) chart(ch *assistantv1.ChartBlock) (chartData, bool) {
 		if r == nil {
 			return chartData{}, false
 		}
+		if p.Value != nil && !finiteNumber(*p.Value) {
+			return chartData{}, false
+		}
 		// An unknown coverage is shown as partial by the client (docs/api.md, Coverage).
 		coverage, ok := enumCode(p.GetBounds().GetCoverage())
 		if !ok {
 			coverage = "partial"
 		}
 		out.Points = append(out.Points, chartPoint{Range: *r, Value: p.Value, Coverage: coverage,
-			DataFrom: optionalMoment(p.GetBounds().DataFrom, c.loc), DataTo: optionalMoment(p.GetBounds().DataTo, c.loc)})
+			DataFrom: optionalMoment(p.GetBounds().GetDataFrom(), c.loc), DataTo: optionalMoment(p.GetBounds().GetDataTo(), c.loc)})
 	}
 	return out, true
 }
 
-func (c converter) rows(r *assistantv1.RowsBlock) rowsData {
+func (c converter) rows(r *assistantv1.RowsBlock) (rowsData, bool) {
 	out := rowsData{Rows: []blockRow{}}
 	for _, row := range r.GetRows() {
 		item := blockRow{Label: row.GetLabel(), Sublabel: row.Sublabel}
@@ -116,6 +122,9 @@ func (c converter) rows(r *assistantv1.RowsBlock) rowsData {
 		case *assistantv1.BlockRow_Count:
 			item.Value, item.ValueKind = v.Count, "count"
 		case *assistantv1.BlockRow_Percent:
+			if !finiteNumber(v.Percent) {
+				return rowsData{}, false
+			}
 			item.Value, item.ValueKind = v.Percent, "percent"
 		case *assistantv1.BlockRow_Text:
 			text := v.Text
@@ -123,8 +132,10 @@ func (c converter) rows(r *assistantv1.RowsBlock) rowsData {
 		}
 		out.Rows = append(out.Rows, item)
 	}
-	return out
+	return out, true
 }
+
+func finiteNumber(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 
 func (c converter) blocks(in []*assistantv1.Block) []Block {
 	out := make([]Block, 0, len(in))
