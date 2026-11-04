@@ -1,0 +1,113 @@
+package app_test
+
+// This file is overlaid as _test.go on the pinned BSD source by scripts/qase90.py.
+// It reuses its real API import, PostgreSQL, TLS object store and scheduler seam.
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/fin-assist/go-worker"
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/fin-assist/bank-statement-data/internal/app"
+	"github.com/fin-assist/bank-statement-data/internal/app/apitest"
+	"github.com/fin-assist/bank-statement-data/internal/config"
+)
+
+func TestAPIQase90Fixture(t *testing.T) {
+	fmt.Println("Q90_STAGE bsd:seed")
+	seed := apitest.StartWith(t, app.Options{Now: calculationNow})
+	operationsAPIImport(t, seed, calculationRuleOFX())
+	var id, taxi string
+	if err := seed.App.DB.Primary().QueryRow(t.Context(), `SELECT id::text FROM regular_payment WHERE user_id=$1 AND description='Cloud'`, apiUser).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.App.DB.Primary().QueryRow(t.Context(), `SELECT id::text FROM regular_payment WHERE user_id=$1 AND description='Taxi'`, apiUser).Scan(&taxi); err != nil {
+		t.Fatal(err)
+	}
+	cfg := seed.App.Cfg
+	seed.Stop()
+	cfg.Service, cfg.Env, cfg.Auth.Mode = "bank-statement-data", config.EnvStage, config.AuthVerify
+	cfg.Peers = map[string]string{"analytics": os.Getenv("Q90_ANALYTICS"), "user": os.Getenv("Q90_USER")}
+	cfg.Auth.Identity = config.IdentityConfig{UserIssuer: os.Getenv("Q90_USER_ISSUER"), UserAudience: os.Getenv("Q90_USER_AUDIENCE"), Stage: config.StageIdentity{Issuer: os.Getenv("Q90_STAGE_ISSUER"), SigningKeyFile: os.Getenv("Q90_KEY"), PublicKeysFile: os.Getenv("Q90_JWKS")}}
+	fmt.Println("Q90_STAGE bsd:verified-assembly")
+	clock := &tickClock{ticks: make(chan time.Time, 1)}
+	a, err := app.New(t.Context(), cfg, slog.New(slog.DiscardHandler), prometheus.NewRegistry(), app.Options{ObjectClient: seed.Objects.Server.Client(), RecalculationClock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.Close)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = a.GRPC.Serve(lis) }()
+	a.GRPC.SetServing(true)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		a.GRPC.Shutdown(ctx, 0)
+		_ = lis.Close()
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.Run(ctx, worker.Options{Logger: slog.New(slog.DiscardHandler), Clock: worker.SystemClock{}}, a.Jobs...)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+			t.Error(err)
+		}
+	})
+	env := &apitest.Env{App: a}
+	settle := func() {
+		clock.ticks <- time.Now()
+		eventuallyMetrics(t, func() bool {
+			var n int
+			err := a.DB.Primary().QueryRow(t.Context(), `SELECT (SELECT count(*) FROM recalc_queue WHERE user_id=$1)+(SELECT count(*) FROM outbox_events)`, apiUser).Scan(&n)
+			return err == nil && n == 0
+		})
+	}
+	fmt.Println("Q90_STAGE bsd:initial-calculation")
+	settle()
+	reply := func(v any) {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Println("QASE90 " + string(raw))
+	}
+	reply(map[string]string{"Address": lis.Addr().String(), "ID": id, "Taxi": taxi, "User": apiUser})
+	scan := bufio.NewScanner(os.Stdin)
+	for scan.Scan() {
+		switch scan.Text() {
+		case "snapshot":
+			reply(dismissalStoredState(t, env, id))
+		case "retry":
+			awaitMarkerRetry(t, env, id, time.Now())
+			reply(map[string]bool{"OK": true})
+		case "ack":
+			awaitMarkerACK(t, env, id)
+			reply(map[string]bool{"OK": true})
+		case "calculate":
+			settle()
+			reply(map[string]bool{"OK": true})
+		case "stop":
+			return
+		default:
+			t.Fatal("unknown Q90 command")
+		}
+	}
+	if err := scan.Err(); err != nil {
+		t.Fatal(err)
+	}
+}

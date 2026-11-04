@@ -78,6 +78,10 @@ down:
 run: build ## run the HTTP BFF locally
 	ENV=dev LOG_FORMAT=text $(BIN) serve
 
+.PHONY: qase90
+qase90: ## TEST_DATABASE_URL, BSD_SOURCE and ANALYTICS_SOURCE: pinned real cross-service Q90
+	python3 scripts/qase90.py --bsd "$(BSD_SOURCE)" --analytics "$(ANALYTICS_SOURCE)"
+
 # FIN-372: shared lint source, identical locally and in CI.
 BASE_REF ?= origin/main
 .PHONY: lint-config lint-migrations

@@ -1,0 +1,56 @@
+package app_test
+
+// Test-only overlay; the ordinary Analytics API assembly owns its database cleanup.
+import (
+	"bufio"
+	"fmt"
+	"github.com/fin-assist/analytics/internal/app/apitest"
+	"github.com/fin-assist/analytics/internal/config"
+	"net"
+	"os"
+	"testing"
+)
+
+func TestAPIQase90Fixture(t *testing.T) {
+	fmt.Println("Q90_STAGE analytics:verified-assembly")
+	env := apitest.Start(t, func(c *config.Config) {
+		c.Service, c.Env, c.Auth.Mode = "analytics", config.EnvStage, config.AuthVerify
+		c.Peers = map[string]string{"user": os.Getenv("Q90_USER")}
+		c.Auth.Identity = config.IdentityConfig{UserIssuer: os.Getenv("Q90_USER_ISSUER"), UserAudience: os.Getenv("Q90_USER_AUDIENCE"), StageIssuer: os.Getenv("Q90_STAGE_ISSUER"), StageSigningKeyFile: os.Getenv("Q90_KEY"), StagePublicKeysFile: os.Getenv("Q90_JWKS")}
+	})
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = env.App.GRPC.Serve(lis) }()
+	t.Cleanup(func() { _ = lis.Close() })
+	fmt.Printf("QASE90 {\"Address\":%q}\n", lis.Addr().String())
+	scan := bufio.NewScanner(os.Stdin)
+	for scan.Scan() {
+		var query string
+		switch scan.Text() {
+		case "fail":
+			query = `ALTER TABLE recalculation_marker RENAME TO qase90_unavailable_marker`
+		case "recover":
+			query = `ALTER TABLE qase90_unavailable_marker RENAME TO recalculation_marker`
+		case "marker":
+			var rows, version int
+			if err := env.App.DB.Primary().QueryRow(t.Context(), `SELECT count(*),coalesce(min(requested_version),0) FROM recalculation_marker`).Scan(&rows, &version); err != nil {
+				t.Fatal(err)
+			}
+			fmt.Printf("QASE90 {\"Rows\":%d,\"RequestedVersion\":%d}\n", rows, version)
+			continue
+		case "stop":
+			return
+		default:
+			t.Fatal("unknown Q90 command")
+		}
+		if _, err := env.App.DB.Primary().Exec(t.Context(), query); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Println("QASE90 {\"OK\":true}")
+	}
+	if err := scan.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
