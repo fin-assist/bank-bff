@@ -28,6 +28,8 @@ tagged BFF API-тесту. Прямой `go test -tags=qase90` без runner/fix
 Отсутствие PostgreSQL, checkout или зависимости также является ошибкой, а не skip.
 Каждая команда runner ограничена 240 секундами; timeout/interrupt убивает process
 group с дочерними fixtures. Go ограничивает исполнение сценария тремя минутами.
+SIGTERM завершает runner через тот же cleanup с кодом 143; реальный regression
+отменяет отдельный runner process и проверяет освобождение блокировки его потомка.
 Отдельный workflow `.github/workflows/qase90.yml` (pull_request и push main), job
 `Qase 90 cross-service`, запускает тот же runner; публичные соседи не требуют
 PAT/секретов. Checkout credentials не сохраняются; workflow token только read.

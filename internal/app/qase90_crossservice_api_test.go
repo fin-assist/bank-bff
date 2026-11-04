@@ -50,6 +50,7 @@ const (
 	q90Value         = "value"
 	q90KeyEnv        = "Q90_KEY="
 	q90TargetPrefix  = "passthrough:///"
+	q90FramePrefix   = "QASE90 "
 )
 
 // Every child is a race-instrumented test binary, not a production control API.
@@ -94,8 +95,8 @@ func q90Start(t *testing.T, binary, source string, vars ...string) *q90Fixture {
 		scan := bufio.NewScanner(stdout)
 		for scan.Scan() {
 			line := scan.Text()
-			if strings.HasPrefix(line, "QASE90 ") {
-				lines <- strings.TrimPrefix(line, "QASE90 ")
+			if strings.HasPrefix(line, q90FramePrefix) {
+				lines <- strings.TrimPrefix(line, q90FramePrefix)
 			} else {
 				switch line {
 				case "Q90_STAGE bsd:seed", "Q90_STAGE bsd:verified-assembly", "Q90_STAGE bsd:initial-calculation", "Q90_STAGE analytics:verified-assembly":

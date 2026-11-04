@@ -43,17 +43,37 @@ def run(args, cwd, env, timeout=240):
     # A process session owns go, test binaries and all fixture descendants. Tool
     # yield/poll intervals are not deadlines. No child detaches from this group.
     print(f"Q90 start {datetime.now(timezone.utc).isoformat()} {args[0:3]}", flush=True)
-    process = subprocess.Popen(args, cwd=cwd, env=env, start_new_session=True)
+    process = None
+    terminated = False
+
+    def terminate(signum, _frame):
+        nonlocal terminated
+        terminated = True
+        if process is not None:
+            raise SystemExit(128 + signum)
+
+    # Before Popen returns, record cancellation without interrupting assignment
+    # of child ownership. Afterwards SIGTERM unwinds through the same cleanup as
+    # SIGINT, timeout and other exceptions. Restore the caller's handler below.
+    previous = signal.signal(signal.SIGTERM, terminate)
     try:
+        process = subprocess.Popen(args, cwd=cwd, env=env, start_new_session=True)
+        if terminated:
+            raise SystemExit(128 + signal.SIGTERM)
         code = process.wait(timeout=timeout)
     finally:
         # Even a normal nonzero go exit (including -test.timeout) can leave a
         # fixture alive after its parent died before t.Cleanup. Reap every path.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait(timeout=10)
+            if process is not None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=10)
+        finally:
+            signal.signal(signal.SIGTERM, previous)
     print(f"Q90 end {datetime.now(timezone.utc).isoformat()} exit={code}", flush=True)
     if code:
         raise subprocess.CalledProcessError(code, args)
