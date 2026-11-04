@@ -22,6 +22,14 @@ const (
 	malformedStreamRoute = "/v1/assistant/messages/{answer_id}/events"
 	malformedChartAlt    = "Chart unavailable"
 	malformedRowsAlt     = "Rows unavailable"
+	malformedBeforeText  = "before"
+	malformedAfterText   = "after"
+	malformedBlockType   = "type"
+	malformedBlockData   = "data"
+	malformedBlocksField = "blocks"
+	malformedCurrency    = "RUB"
+	malformedTimeZone    = "Europe/Moscow"
+	malformedLastIndex   = 8
 )
 
 func malformedAssistantBlocks() []*assistantv1.Block {
@@ -34,32 +42,32 @@ func malformedAssistantBlocks() []*assistantv1.Block {
 	text := func(value string) *assistantv1.Block {
 		return &assistantv1.Block{Content: &assistantv1.Block_Text{Text: &assistantv1.TextBlock{Text: value}}}
 	}
-	blocks := []*assistantv1.Block{text("before"), chart(42, nil)}
+	blocks := []*assistantv1.Block{text(malformedBeforeText), chart(42, nil)}
 	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
 		blocks = append(blocks, chart(value, &commonv1.DataBounds{Coverage: commonv1.Coverage_COVERAGE_COMPLETE}),
 			&assistantv1.Block{AltText: proto.String(malformedRowsAlt), Content: &assistantv1.Block_Rows{Rows: &assistantv1.RowsBlock{
 				Rows: []*assistantv1.BlockRow{{Label: "Share", Value: &assistantv1.BlockRow_Percent{Percent: value}}},
 			}}})
 	}
-	return append(blocks, text("after"))
+	return append(blocks, text(malformedAfterText))
 }
 
 func assertMalformedAssistantBlock(t *testing.T, index int, block map[string]any) {
 	t.Helper()
 	switch index {
-	case 0, 8:
-		want := "before"
-		if index == 8 {
-			want = "after"
+	case 0, malformedLastIndex:
+		want := malformedBeforeText
+		if index == malformedLastIndex {
+			want = malformedAfterText
 		}
-		if block["type"] != "text" || block["data"].(map[string]any)["text"] != want {
+		if block[malformedBlockType] != "text" || block[malformedBlockData].(map[string]any)["text"] != want {
 			t.Fatalf("adjacent text changed: %v", block)
 		}
 	case 1:
-		if block["type"] != "chart" {
+		if block[malformedBlockType] != "chart" {
 			t.Fatalf("chart without bounds was lost: %v", block)
 		}
-		point := block["data"].(map[string]any)["points"].([]any)[0].(map[string]any)
+		point := block[malformedBlockData].(map[string]any)["points"].([]any)[0].(map[string]any)
 		if point["coverage"] != "partial" || point["value"] != float64(42) || point["data_from"] != nil || point["data_to"] != nil {
 			t.Fatalf("missing bounds changed the point: %v", point)
 		}
@@ -68,7 +76,7 @@ func assertMalformedAssistantBlock(t *testing.T, index int, block map[string]any
 		if index%2 == 1 {
 			alt = malformedRowsAlt
 		}
-		if block["type"] != "unsupported" || block["alt_text"] != alt || block["data"] != nil {
+		if block[malformedBlockType] != "unsupported" || block["alt_text"] != alt || block[malformedBlockData] != nil {
 			t.Fatalf("invalid number was not replaced by an accessible fallback: %v", block)
 		}
 	}
@@ -79,19 +87,19 @@ func TestAPIMalformedAssistantBlocksPreserveHistorySnapshotAndEvents(t *testing.
 	blocks := malformedAssistantBlocks()
 	b.peers.Assistant.Set(func(a *testpeer.Assistant) {
 		a.ListFunc = func(context.Context, *assistantv1.ListMessagesRequest) (*assistantv1.ListMessagesResponse, error) {
-			return &assistantv1.ListMessagesResponse{TimeZone: "Europe/Moscow", Messages: []*assistantv1.Message{{
+			return &assistantv1.ListMessagesResponse{TimeZone: malformedTimeZone, Messages: []*assistantv1.Message{{
 				Id: "answer", Role: assistantv1.Role_ROLE_ASSISTANT, Status: assistantv1.AnswerStatus_ANSWER_STATUS_COMPLETE,
-				Currency: "RUB", CreatedAt: created, Blocks: blocks,
+				Currency: malformedCurrency, CreatedAt: created, Blocks: blocks,
 			}}}, nil
 		}
 		a.WatchFunc = func(_ *assistantv1.WatchAnswerRequest, stream grpc.ServerStreamingServer[assistantv1.WatchAnswerResponse]) error {
-			if err := stream.Send(&assistantv1.WatchAnswerResponse{TimeZone: "Europe/Moscow", Event: &assistantv1.WatchAnswerResponse_Snapshot{Snapshot: &assistantv1.AnswerSnapshot{
-				Status: assistantv1.AnswerStatus_ANSWER_STATUS_COMPLETE, Currency: "RUB", Blocks: blocks,
+			if err := stream.Send(&assistantv1.WatchAnswerResponse{TimeZone: malformedTimeZone, Event: &assistantv1.WatchAnswerResponse_Snapshot{Snapshot: &assistantv1.AnswerSnapshot{
+				Status: assistantv1.AnswerStatus_ANSWER_STATUS_COMPLETE, Currency: malformedCurrency, Blocks: blocks,
 			}}}); err != nil {
 				return err
 			}
 			for i, block := range blocks {
-				if err := stream.Send(&assistantv1.WatchAnswerResponse{TimeZone: "Europe/Moscow", Event: &assistantv1.WatchAnswerResponse_Block{Block: &assistantv1.AnswerBlock{
+				if err := stream.Send(&assistantv1.WatchAnswerResponse{TimeZone: malformedTimeZone, Event: &assistantv1.WatchAnswerResponse_Block{Block: &assistantv1.AnswerBlock{
 					Index: int32(i), Block: block,
 				}}}); err != nil {
 					return err
@@ -105,7 +113,7 @@ func TestAPIMalformedAssistantBlocksPreserveHistorySnapshotAndEvents(t *testing.
 	if history.StatusCode != http.StatusOK {
 		t.Fatalf("history failed: %d %s", history.StatusCode, history.body)
 	}
-	items := history.json["messages"].([]any)[0].(map[string]any)["blocks"].([]any)
+	items := history.json["messages"].([]any)[0].(map[string]any)[malformedBlocksField].([]any)
 	if len(items) != len(blocks) {
 		t.Fatal("history lost block positions")
 	}
@@ -120,7 +128,7 @@ func TestAPIMalformedAssistantBlocksPreserveHistorySnapshotAndEvents(t *testing.
 	if len(events) != len(blocks)+2 || events[0].Name != "snapshot" || events[len(events)-1].Name != "done" {
 		t.Fatalf("stream lost its snapshot or terminal event: %+v", events)
 	}
-	snapshot := events[0].Data["blocks"].([]any)
+	snapshot := events[0].Data[malformedBlocksField].([]any)
 	if len(snapshot) != len(blocks) {
 		t.Fatal("snapshot lost block positions")
 	}

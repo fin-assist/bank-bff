@@ -12,7 +12,7 @@ import (
 
 func TestIntegrationWriteJSONEncodingFailureBeforeHTTPCommit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		WriteJSON(w, http.StatusCreated, map[string]float64{"value": math.NaN()})
+		WriteJSON(w, http.StatusCreated, map[string]float64{encodingValueField: math.NaN()})
 	}))
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -31,7 +31,7 @@ func TestIntegrationWriteJSONEncodingFailureBeforeHTTPCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	failure := decodeError(t, string(body))
-	if resp.StatusCode != http.StatusInternalServerError || failure.Code != "INTERNAL_ERROR" || failure.Retryable == nil || *failure.Retryable {
+	if resp.StatusCode != http.StatusInternalServerError || failure.Code != expectedEncodingError || failure.Retryable == nil || *failure.Retryable {
 		t.Fatalf("HTTP committed an invalid success: %d %s", resp.StatusCode, body)
 	}
 }

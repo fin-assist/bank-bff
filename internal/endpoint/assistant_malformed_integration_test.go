@@ -17,12 +17,12 @@ import (
 // Exercise the protobuf transport and converter independently of the public BFF.
 func TestIntegrationMalformedAssistantBlocksSurviveTransportAndStaySerializable(t *testing.T) {
 	missingBounds := chartBlock()
-	missingBounds.GetChart().Points[0].Bounds = nil
+	missingBounds.GetChart().Points[malformedChartPointIndex].Bounds = nil
 	blocks := []*assistantv1.Block{missingBounds}
 	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
 		chart, rows := chartBlock(), rowsBlock()
-		chart.GetChart().Points[0].Value = proto.Float64(value)
-		rows.GetRows().Rows[2].Value = &assistantv1.BlockRow_Percent{Percent: value}
+		chart.GetChart().Points[malformedChartPointIndex].Value = proto.Float64(value)
+		rows.GetRows().Rows[malformedPercentRowIndex].Value = &assistantv1.BlockRow_Percent{Percent: value}
 		blocks = append(blocks, chart, rows)
 	}
 	peers := testpeer.Start(t, testpeer.NewKeys(t), testpeer.NewStageFiles(t))
@@ -43,15 +43,15 @@ func TestIntegrationMalformedAssistantBlocksSurviveTransportAndStaySerializable(
 		t.Fatal(err)
 	}
 	wire := page.GetMessages()[0].GetBlocks()
-	if wire[0].GetChart().GetPoints()[0].GetBounds() != nil || !math.IsNaN(*wire[1].GetChart().GetPoints()[0].Value) {
+	if wire[0].GetChart().GetPoints()[malformedChartPointIndex].GetBounds() != nil || !math.IsNaN(*wire[1].GetChart().GetPoints()[malformedChartPointIndex].Value) {
 		t.Fatal("transport removed the regression inputs")
 	}
 	out := (converter{loc: time.UTC}).blocks(wire)
-	if len(out) != len(blocks) || out[0].Type != "chart" || out[0].Data.(chartData).Points[0].Coverage != "partial" {
+	if len(out) != len(blocks) || out[0].Type != expectedAssistantChart || out[0].Data.(chartData).Points[malformedChartPointIndex].Coverage != expectedAssistantPartial {
 		t.Fatalf("missing bounds broke conversion: %+v", out)
 	}
 	for i := 1; i < len(out); i++ {
-		if out[i].Type != "unsupported" || out[i].Data != nil || out[i].AltText == nil || *out[i].AltText != *blocks[i].AltText {
+		if out[i].Type != expectedAssistantUnsupported || out[i].Data != nil || out[i].AltText == nil || *out[i].AltText != *blocks[i].AltText {
 			t.Fatalf("block %d lost its fallback: %+v", i, out[i])
 		}
 	}
