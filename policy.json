@@ -2,5 +2,36 @@
   "baseBranchPatterns": [
     "main"
   ],
-  "packageRules": []
+  "packageRules": [
+    {
+      "description": "FIN-211: recovery of an automatically failed dependency family",
+      "matchPackageNames": [
+        "github.com/fin-assist/go-grpc"
+      ],
+      "matchDatasources": [
+        "go"
+      ],
+      "recreateWhen": "always",
+      "matchJsonata": [
+        "newMajor = 0"
+      ]
+    },
+    {
+      "description": "FIN-211: failed twice; retry explicitly in Dependency Dashboard",
+      "matchPackageNames": [
+        "github.com/fin-assist/go-grpc"
+      ],
+      "matchDatasources": [
+        "go"
+      ],
+      "dependencyDashboardApproval": true,
+      "recreateWhen": "never",
+      "groupName": null,
+      "additionalBranchPrefix": "fin211-retry-20-",
+      "matchNewValue": "/^v0\\.2\\.1$/",
+      "matchJsonata": [
+        "$not($exists(newDigest)) or newDigest = null"
+      ]
+    }
+  ]
 }
