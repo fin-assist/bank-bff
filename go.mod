@@ -8,7 +8,7 @@ require (
 	github.com/fin-assist/go-identity v0.2.0
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/prometheus/client_golang v1.25.0
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20261026165753-2ffab32bce7e
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261104224025-d1e00e9f33ab
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 )
