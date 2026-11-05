@@ -96,3 +96,8 @@ renovate-policy, main-only Environment, доступ существующего 
 контроллер проверяет подписанные identities Go compiler/toolchain, Docker golang и
 actions/go-versions. Наличие такого обновления в смешанной группе оставляет весь PR
 владельцу. Одного disabled правила в baseline недостаточно для старых PR.
+
+FIN-447: target guard до синхронизации baseline проверяет каждый обязательный check с
+единственной привязкой к GitHub Actions App15368 и явно запрещённые force-push/delete.
+Конфликт или неизвестная mergeability оставляет PR без retry, quarantine и close;
+состояние blocked только из-за красного CI не отменяет разрешённый один повтор.
