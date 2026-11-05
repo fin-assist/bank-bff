@@ -26,6 +26,8 @@ The owner's latest decision and contracts take precedence over copied template a
 - Dockerfile, compose.yaml, deploy/systemd/bank-bff.service: packaging and stand example.
 - Makefile, .github/workflows/ci.yml, .finassist-ci.json: checks and pinned shared lint profile.
 - CHANGELOG.md, docs/releasing.md, .github/workflows/release.yml, scripts/changelog.py: service releases.
+- renovate-base.json, renovate.json, .github/renovate-policy.json, scripts/renovate_policy*.py:
+  reviewed baseline, signed Renovate metadata and guarded update controller (docs/renovate-policy.md).
 
 Keep README, AGENTS and docs current in the same PR. Code, comments and commits are English;
 docs and PR title/body are Russian. Every exported identifier has a doc comment.
@@ -252,3 +254,14 @@ After BSD has committed, Apply failures are translated with Call.FailAs: only au
 Canonical contract: FIN-418/FIN-420, gen/go v0.11.0 / merged60fa09c. PUT dismissal requires a single date=YYYY-MM and transfer_mode before any effect; pass params to BSD once, verify its positive target, projection params and user_id against identity.UserID(ctx), and enforce 3 MiB before forwarding the unchanged MetricProjection to ApplyRegularPaymentDismissal. Analytics composes only that source result; it does not read a regular snapshot or BSD. Unknown protobuf fields are preserved. Return200 with complete blocks and required_calc_version; never a receipt-only success or local financial arithmetic. Each child call has its own bounded deadline and is never implicitly replayed. Service retry permission is combined with the proven construction-idempotence of both assignments. A new unavailable month is BSD400 date/OUT_OF_RANGE without a write; only an already saved assignment with unavailable context is BSD canonical422 ANALYTICS_CONTEXT_UNAVAILABLE with truthful saved-change text and retryable=false; restore remains204.
 
 GET analytics forwards required calculation including has_data=false. Preserve actual source time_zone in analytics, period lists, block updates, chart pages, import config/complete and operation lists; missing required/invalid zones fail closed. No profile lookup/default substitution. Historical offsets containing seconds are rendered inUTC (same instant), with source IANA preserved. Blocks/help_text and nested tile data remain opaque. GET /v1/analytics/charts/monthly_chart forwards one bounded opaque cursor and service errors without recalculation or inspecting financial points. Import config forwards optional inclusive period_from/period_to strings; BSD owns pairing, order, today and IANA boundaries. Empty/repeated scalars retain exact FIN-418 violation codes. Rollout: analytics, then BSD/BFF, then Android/mock; deployment is separate.
+
+## Renovate controller (FIN-447)
+
+The exact-true gate keeps the controller disabled before Environment admission, credentials and API access.
+Activation is a separate owner operation after bootstrap, main-only Environment and strict owner-only
+main/release/*/renovate-policy protection checks. Never bypass a guard or enable native auto-merge.
+Required dependency checks are go, lint, image, Renovate policy tests and Renovate runtime contract.
+The baseline preserves manual Go compiler/toolchain updates and the shared Go CI pin group; changes to
+the copied bootstrap still require human synchronization and stay outside bot-only automatic handling.
+The CI job runs real Renovate runtime/metadata fixtures with the pinned lock, without install scripts.
+Only signed bot-only dependency PRs may be merged by the controller; human PRs still require owner merge.
