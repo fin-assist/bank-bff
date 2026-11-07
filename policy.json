@@ -19,19 +19,6 @@
     {
       "description": "FIN-211: recovery of an automatically failed dependency family",
       "matchPackageNames": [
-        "github.com/getkin/kin-openapi"
-      ],
-      "matchDatasources": [
-        "go"
-      ],
-      "recreateWhen": "always",
-      "matchJsonata": [
-        "newMajor = 0"
-      ]
-    },
-    {
-      "description": "FIN-211: recovery of an automatically failed dependency family",
-      "matchPackageNames": [
         "google.golang.org/genproto/googleapis/rpc"
       ],
       "matchDatasources": [
@@ -66,6 +53,19 @@
       "recreateWhen": "always",
       "matchJsonata": [
         "newMajor = 44"
+      ]
+    },
+    {
+      "description": "FIN-211: recovery of an automatically failed dependency family",
+      "matchPackageNames": [
+        "github.com/getkin/kin-openapi"
+      ],
+      "matchDatasources": [
+        "go"
+      ],
+      "recreateWhen": "always",
+      "matchJsonata": [
+        "newMajor = 0"
       ]
     },
     {
@@ -261,6 +261,23 @@
       "additionalBranchPrefix": "fin211-retry-52-",
       "matchJsonata": [
         "newDigest = \"sha512-yXl/d68MR86/24CmbshWXaQFKE7QT9fEkesJa3XqAZyI4FcWa1Mlpym5q3wJIm8VzOMb75lGpqmBzneqxgzQDA==\""
+      ]
+    },
+    {
+      "description": "FIN-211: failed twice; retry explicitly in Dependency Dashboard",
+      "matchPackageNames": [
+        "github.com/getkin/kin-openapi"
+      ],
+      "matchDatasources": [
+        "go"
+      ],
+      "dependencyDashboardApproval": true,
+      "recreateWhen": "never",
+      "groupName": null,
+      "additionalBranchPrefix": "fin211-retry-53-",
+      "matchNewValue": "/^v0\\.153\\.0$/",
+      "matchJsonata": [
+        "$not($exists(newDigest)) or newDigest = null"
       ]
     }
   ]
